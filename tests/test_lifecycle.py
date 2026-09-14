@@ -1,0 +1,270 @@
+"""Stdlib unit tests: python3 -m unittest -v"""
+import base64
+import json
+import os
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+from datetime import date, timedelta
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+TMP = tempfile.mkdtemp(prefix="peopleschoft-test-")
+os.environ["PS_DB_PATH"] = str(Path(TMP) / "test.db")
+os.environ["OKTA_MODE"] = "dryrun"
+os.environ["OKTA_SYNC_INTERVAL"] = "0"
+
+from peopleschoft import db, hr, okta, scim  # noqa: E402
+from peopleschoft.journey import run_journey  # noqa: E402
+from peopleschoft.server import Handler  # noqa: E402
+
+TODAY = date.today().isoformat()
+
+
+def fresh_conn():
+    conn = db.connect()
+    db.reset_db(conn)
+    hr.seed(conn)
+    return conn
+
+
+class SeedTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = fresh_conn()
+
+    def test_seed_counts_and_scenarios(self):
+        workers, total = hr.list_workers(self.conn)
+        self.assertEqual(total, 32)
+        self.assertEqual(hr.get_worker(self.conn, "100026")["emplStatus"], "T")
+        self.assertEqual(hr.get_worker(self.conn, "100020")["emplStatus"], "L")
+        pre = hr.get_worker(self.conn, "100032")
+        self.assertTrue(pre["preHire"])
+        self.assertGreater(pre["hireDate"], TODAY)
+
+    def test_effective_dating_as_of(self):
+        self.assertEqual(hr.get_worker(self.conn, "100026", asof="2024-01-01")["emplStatus"], "A")
+        self.assertEqual(hr.get_worker(self.conn, "100011", asof="2020-01-01")["job"]["action"], "HIR")
+        self.assertEqual(hr.get_worker(self.conn, "100011")["job"]["action"], "PRO")
+
+
+class LifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = fresh_conn()
+        self.w = hr.hire(self.conn, {"firstName": "Ada", "lastName": "Lovelace", "deptid": "13000", "jobcode": "SWE2",
+                                     "supervisorId": "100010", "hireDate": "2026-01-05"})
+        self.id = self.w["emplid"]
+
+    def test_hire_defaults(self):
+        self.assertEqual(self.w["workEmail"], "ada.lovelace@gbi.example.com")
+        self.assertEqual(self.w["job"]["location"], "SFHQ")  # from department
+        self.assertEqual(self.w["emplStatus"], "A")
+        self.assertEqual(self.w["job"]["action"], "HIR")
+
+    def test_full_journey_transitions(self):
+        w = hr.transfer(self.conn, self.id, "2026-02-01", deptid="13100", location="AUS01", supervisor_id="100014")
+        self.assertEqual((w["job"]["deptid"], w["job"]["location"], w["job"]["supervisorId"]), ("13100", "AUS01", "100014"))
+        w = hr.promote(self.conn, self.id, "SWE3", "2026-03-01", 170000)
+        self.assertEqual(w["job"]["jobTitle"], "Senior Software Engineer")
+        self.assertEqual(w["job"]["deptid"], "13100")  # carried forward
+        w = hr.leave_of_absence(self.conn, self.id, "2026-04-01", "PAR")
+        self.assertEqual(w["emplStatus"], "L")
+        self.assertEqual(w["hrStatus"], "A")
+        w = hr.return_from_leave(self.conn, self.id, "2026-05-01")
+        self.assertEqual(w["emplStatus"], "A")
+        w = hr.terminate(self.conn, self.id, "2026-06-01", "RES")
+        self.assertEqual((w["emplStatus"], w["hrStatus"], w["terminationDate"], w["lastDateWorked"]), ("T", "I", "2026-06-01", "2026-05-31"))
+        w = hr.rehire(self.conn, self.id, "2026-07-01", deptid="16000", jobcode="IAMENG")
+        self.assertEqual((w["emplStatus"], w["rehireDate"], w["terminationDate"]), ("A", "2026-07-01", None))
+        self.assertEqual(len(hr.job_history(self.conn, self.id)), 7)
+        types = [r["EVENT_TYPE"] for r in db.rows(self.conn, "SELECT EVENT_TYPE FROM PS_OKTA_EVENTS WHERE EMPLID=? ORDER BY EVENT_ID", (self.id,))]
+        self.assertEqual(types, ["worker.hired", "worker.transferred", "worker.promoted", "worker.leave_started",
+                                 "worker.leave_ended", "worker.terminated", "worker.rehired"])
+
+    def test_business_rules(self):
+        with self.assertRaises(hr.HRError):
+            hr.return_from_leave(self.conn, self.id)           # not on leave
+        with self.assertRaises(hr.HRError):
+            hr.rehire(self.conn, self.id)                      # still active
+        with self.assertRaises(hr.HRError):
+            hr.transfer(self.conn, self.id, supervisor_id=self.id)
+        with self.assertRaises(hr.HRError):
+            hr.transfer(self.conn, self.id, "2025-12-01", deptid="13100")   # before latest row
+        with self.assertRaises(hr.HRError):
+            hr.transfer(self.conn, self.id, deptid="99999")
+        hr.terminate(self.conn, self.id, "2026-06-01")
+        with self.assertRaises(hr.HRError):
+            hr.terminate(self.conn, self.id, "2026-06-02")
+        with self.assertRaises(hr.HRError):
+            hr.promote(self.conn, self.id, "SWE3", "2026-06-02")
+
+    def test_future_dated_termination_respected(self):
+        future = (date.today() + timedelta(days=6)).isoformat()
+        w = hr.terminate(self.conn, self.id, future)
+        self.assertEqual(w["emplStatus"], "A")   # still active today
+        with self.assertRaises(hr.HRError):
+            hr.terminate(self.conn, self.id, future)  # latest row is already TER
+        ev = db.rows(self.conn, "SELECT EVENT_TYPE, EFFDT FROM PS_OKTA_EVENTS WHERE EMPLID=? ORDER BY EVENT_ID", (self.id,))
+        self.assertEqual([e["EVENT_TYPE"] for e in ev], ["worker.hired", "worker.termination_scheduled", "worker.terminated"])
+        okta.sync_pending(self.conn)
+        st = {r["EVENT_TYPE"]: r["STATUS"] for r in db.rows(self.conn, "SELECT EVENT_TYPE, STATUS FROM PS_OKTA_EVENTS WHERE EMPLID=?", (self.id,))}
+        self.assertEqual(st["worker.terminated"], "SCHEDULED")
+        self.assertEqual(st["worker.termination_scheduled"], "DRYRUN")
+
+    def test_personal_data_change(self):
+        w = hr.update_personal(self.conn, self.id, {"lastName": "King", "workEmail": "ada.king@gbi.example.com"})
+        self.assertEqual((w["displayName"], w["workEmail"]), ("Ada King", "ada.king@gbi.example.com"))
+        ev = db.row(self.conn, "SELECT ACTION_REASON, PAYLOAD FROM PS_OKTA_EVENTS WHERE EMPLID=? ORDER BY EVENT_ID DESC LIMIT 1", (self.id,))
+        self.assertEqual(ev["ACTION_REASON"], "NAM")
+        self.assertIn("lastName", json.loads(ev["PAYLOAD"])["changes"])
+
+    def test_changed_since(self):
+        _, n = hr.list_workers(self.conn, changed_since="2099-01-01T00:00:00Z")
+        self.assertEqual(n, 0)
+        _, n = hr.list_workers(self.conn, changed_since="2000-01-01T00:00:00Z")
+        self.assertEqual(n, 33)
+
+    def test_generic_action_router(self):
+        w = hr.generic_action(self.conn, self.id, {"action": "xfr", "deptid": "14000", "effdt": "2026-02-01"})
+        self.assertEqual(w["job"]["deptid"], "14000")
+        self.assertEqual(w["job"]["supervisorId"], "100018")  # dept manager default
+        with self.assertRaises(hr.HRError):
+            hr.generic_action(self.conn, self.id, {"action": "NOPE"})
+
+
+class OktaMappingTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = fresh_conn()
+        self.client = okta.OktaClient()
+
+    def test_profile_and_status(self):
+        w = hr.get_worker(self.conn, "100011")
+        p = self.client.profile_from_worker(w)
+        self.assertEqual(p["login"], "hannah.schmidt@gbi.example.com")
+        self.assertEqual(p["employeeNumber"], "100011")
+        self.assertEqual(p["managerId"], "100010")
+        self.assertEqual(p["title"], "Senior Software Engineer")
+        self.assertNotIn("hireDate", p)
+        self.assertIn("hireDate", self.client.profile_from_worker(w, include_custom=True))
+        self.assertEqual(self.client.desired_status(w), "ACTIVE")
+        self.assertEqual(self.client.desired_status(hr.get_worker(self.conn, "100020")), "SUSPENDED")
+        self.assertEqual(self.client.desired_status(hr.get_worker(self.conn, "100026")), "DEPROVISIONED")
+        self.assertEqual(self.client.desired_status(hr.get_worker(self.conn, "100032")), "STAGED")
+
+    def test_users_api_plan(self):
+        w = hr.get_worker(self.conn, "100020")
+        notes = [s["note"] for s in self.client.plan_users_api(w, existing={"id": "00u1", "status": "ACTIVE"})]
+        self.assertIn("On leave -> suspend", notes)
+        w = hr.get_worker(self.conn, "100026")
+        notes = [s["note"] for s in self.client.plan_users_api(w, existing={"id": "00u1", "status": "ACTIVE"})]
+        self.assertIn("Terminated -> deactivate", notes)
+        notes = [s["note"] for s in self.client.plan_users_api(w, existing=None)]
+        self.assertIn("No Okta user exists; nothing to deactivate", notes)
+        w = hr.get_worker(self.conn, "100032")
+        self.assertIn("Create user as STAGED (pre-hire)", [s["note"] for s in self.client.plan_users_api(w)])
+
+    def test_journey_dryrun_sync(self):
+        r = run_journey(self.conn)
+        self.assertEqual(len(r["steps"]), 8)
+        s = okta.sync_pending(self.conn)
+        self.assertEqual((s["processed"], s["dryrun"], s["failed"]), (8, 8, 0))
+        ev = db.rows(self.conn, "SELECT REQUEST_PREVIEW FROM PS_OKTA_EVENTS WHERE EMPLID=? ORDER BY EVENT_ID", (r["emplid"],))
+        plans = [json.loads(e["REQUEST_PREVIEW"])["usersApi"] for e in ev]
+        self.assertTrue(any("suspend" in s["url"] for s in plans[4]))
+        self.assertTrue(any("deactivate" in s["url"] for s in plans[6]))
+
+    def test_identity_source_plan(self):
+        ws = [hr.get_worker(self.conn, "100011"), hr.get_worker(self.conn, "100026")]
+        steps = self.client.plan_identity_source(ws)
+        self.assertEqual([s["note"] for s in steps], ["Create import session", "Upsert joiners/movers", "Delete leavers", "Trigger import"])
+        self.assertEqual(steps[1]["body"]["profiles"][0]["profile"]["userName"], "hannah.schmidt@gbi.example.com")
+        self.assertEqual(steps[2]["body"]["profiles"][0]["externalId"], "100026")
+
+
+class ScimTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = fresh_conn()
+        self.base = "http://test"
+
+    def test_crud_and_linking(self):
+        body = {"userName": "hannah.schmidt@gbi.example.com", "name": {"givenName": "Hannah", "familyName": "Schmidt"},
+                "emails": [{"value": "hannah.schmidt@gbi.example.com", "primary": True}], "externalId": "00u1", "active": True}
+        u = scim.create_user(self.conn, body, self.base)
+        self.assertEqual(u[scim.ENT]["employeeNumber"], "100011")  # linked by email
+        self.assertEqual(u["active"], True)
+        u = scim.patch_user(self.conn, u["id"], {"Operations": [{"op": "replace", "value": {"active": False}}]}, self.base)
+        self.assertFalse(u["active"])
+        self.assertEqual(db.row(self.conn, "SELECT ACCTLOCK FROM PSOPRDEFN WHERE SCIM_ID=?", (u["id"],))["ACCTLOCK"], 1)
+        u = scim.patch_user(self.conn, u["id"], {"Operations": [{"op": "replace", "path": "name.familyName", "value": "Berg"}]}, self.base)
+        self.assertEqual(u["name"]["familyName"], "Berg")
+        lst = scim.list_users(self.conn, self.base, 'userName eq "HANNAH.schmidt@gbi.example.com"')
+        self.assertEqual(lst["totalResults"], 1)
+        with self.assertRaises(scim.ScimError) as cm:
+            scim.create_user(self.conn, body, self.base)
+        self.assertEqual(cm.exception.status, 409)
+        scim.delete_user(self.conn, u["id"])
+        with self.assertRaises(scim.ScimError):
+            scim.get_by_id(self.conn, u["id"]) or scim._by_id_or_404(self.conn, u["id"])
+
+
+class HttpTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        fresh_conn().close()
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.server_close()
+
+    def call(self, method, path, body=None, auth="basic"):
+        headers = {"Content-Type": "application/json"}
+        if auth == "basic":
+            headers["Authorization"] = "Basic " + base64.b64encode(b"PS:PS").decode()
+        elif auth == "scim":
+            headers["Authorization"] = "Bearer peopleschoft-scim-token"
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req) as r:
+                raw = r.read()
+                return r.status, json.loads(raw) if raw and r.headers.get("Content-Type", "").find("json") >= 0 else raw
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            return e.code, json.loads(raw) if raw else None
+
+    def test_auth_and_endpoints(self):
+        self.assertEqual(self.call("GET", "/api/v1/workers", auth=None)[0], 401)
+        self.assertEqual(self.call("GET", "/api/v1/health", auth=None)[0], 200)
+        st, body = self.call("GET", "/api/v1/workers?status=L")
+        self.assertEqual((st, body["count"]), (200, 1))
+        st, body = self.call("GET", "/PSIGW/RESTListeningConnector/PSFT_HR/WORKER.v1/100001")
+        self.assertEqual((st, body["displayName"]), (200, "Margaret Chen"))
+        st, body = self.call("POST", "/api/v1/workers", {"firstName": "Grace", "lastName": "Hopper", "deptid": "16000", "jobcode": "SECENG"})
+        self.assertEqual(st, 201)
+        emplid = body["emplid"]
+        st, body = self.call("POST", f"/api/v1/workers/{emplid}/terminate", {"reason": "RES", "effdt": TODAY})
+        self.assertEqual((st, body["emplStatus"]), (200, "T"))
+        st, body = self.call("POST", f"/api/v1/workers/{emplid}/terminate", {"reason": "RES", "effdt": TODAY})
+        self.assertEqual(st, 400)
+        self.assertIn("already", body["error"])
+        st, body = self.call("POST", "/api/v1/okta/sync")
+        self.assertEqual((st, body["mode"]), (200, "dryrun"))
+        self.assertEqual(self.call("GET", "/")[0], 200)
+        self.assertEqual(self.call("GET", f"/employees/{emplid}")[0], 200)
+
+    def test_scim_http(self):
+        self.assertEqual(self.call("GET", "/scim/v2/Users", auth=None)[0], 401)
+        st, body = self.call("GET", "/scim/v2/ServiceProviderConfig", auth="scim")
+        self.assertEqual((st, body["patch"]["supported"]), (200, True))
+        st, body = self.call("POST", "/scim/v2/Users", {"userName": "new.user@gbi.example.com", "name": {"givenName": "New", "familyName": "User"}}, auth="scim")
+        self.assertEqual(st, 201)
+        st, _ = self.call("DELETE", f"/scim/v2/Users/{body['id']}", auth="scim")
+        self.assertEqual(st, 204)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,23 @@
+.PHONY: start seed reset demo sync status test mock-okta journey
+PORT ?= 8080
+
+start:        ## Start web UI + API (seeds on first run)
+	./start.sh $(PORT)
+seed:         ## Create schema + demo data if empty
+	python3 -m peopleschoft seed
+reset:        ## Drop everything and re-seed
+	python3 -m peopleschoft reset --yes
+demo:         ## Run the joiner/mover/leaver/rehire journey from the CLI
+	python3 -m peopleschoft demo
+sync:         ## Flush the Okta outbox once
+	python3 -m peopleschoft okta-sync
+status:       ## Counts + Okta configuration
+	python3 -m peopleschoft status
+test:         ## Run the unit tests
+	python3 -m unittest -v
+mock-okta:    ## Start a fake Okta org on :9090 (users / webhook / identity-source modes work against it)
+	python3 scripts/mock_okta.py --port 9090
+journey:      ## Drive the lifecycle journey with curl against a running server
+	./scripts/demo_journey.sh http://localhost:$(PORT)
+docker-files: ## Generate Dockerfile, docker-compose.yml and .dockerignore
+	python3 scripts/generate_docker.py --port $(PORT)

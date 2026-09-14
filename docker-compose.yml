@@ -1,0 +1,38 @@
+services:
+  peopleschoft:
+    build: .
+    image: peopleschoft:latest
+    container_name: peopleschoft
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PS_PORT: "8080"
+      PS_PUBLIC_URL: "${PS_PUBLIC_URL:-http://localhost:8080}"
+      # Okta outbound: dryrun | webhook | users | identity-source  (see .env.example)
+      OKTA_MODE: "${OKTA_MODE:-dryrun}"
+      OKTA_ORG_URL: "${OKTA_ORG_URL:-https://dev-000000.okta.com}"
+      OKTA_API_TOKEN: "${OKTA_API_TOKEN:-}"
+      OKTA_IDENTITY_SOURCE_ID: "${OKTA_IDENTITY_SOURCE_ID:-}"
+      OKTA_WEBHOOK_URL: "${OKTA_WEBHOOK_URL:-}"
+      OKTA_WEBHOOK_TOKEN: "${OKTA_WEBHOOK_TOKEN:-}"
+    volumes:
+      - peopleschoft-data:/app/data
+    restart: unless-stopped
+
+  # Fake Okta org so the users / webhook / identity-source modes work without a tenant.
+  # Point PeopleSchoft at it with: OKTA_MODE=users OKTA_ORG_URL=http://mock-okta:9090 OKTA_API_TOKEN=mock
+  mock-okta:
+    image: peopleschoft:latest
+    container_name: mock-okta
+    command: ["python3", "scripts/mock_okta.py", "--port", "9090"]
+    ports:
+      - "9090:9090"
+    depends_on:
+      - peopleschoft
+    restart: unless-stopped
+
+volumes:
+  peopleschoft-data:
