@@ -70,8 +70,13 @@ class H(BaseHTTPRequestHandler):
             self._log("GET", self.path, 200)
             return self._send(200, users)
         m = re.match(r"^/api/v1/users/([^/]+)$", u.path)
-        if m and m.group(1) in USERS:
-            return self._send(200, USERS[m.group(1)])
+        if m:
+            key = urllib.parse.unquote(m.group(1))
+            if key in USERS:
+                return self._send(200, USERS[key])
+            for x in USERS.values():   # Okta also resolves /users/{login}
+                if x["profile"].get("login", "").lower() == key.lower():
+                    return self._send(200, x)
         self._log("GET", self.path, 404)
         return self._send(404, {"errorCode": "E0000007", "errorSummary": "Not found"})
 
@@ -91,14 +96,22 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400, {"errorCode": "E0000001", "errorSummary": "Api validation failed: login",
                                             "errorCauses": [{"errorSummary": "login: An object with this field already exists in the current organization"}]})
             uid = "00u" + uuid.uuid4().hex[:17]
-            status = "ACTIVE" if q.get("activate", "true") == "true" else "STAGED"
-            USERS[uid] = {"id": uid, "status": status, "created": now(), "lastUpdated": now(), "profile": profile}
+            has_pw = bool((body.get("credentials") or {}).get("password", {}).get("value"))
+            status = "STAGED" if q.get("activate", "true") != "true" else ("ACTIVE" if has_pw else "PROVISIONED")
+            USERS[uid] = {"id": uid, "status": status, "created": now(), "lastUpdated": now(), "profile": profile, "_pw": has_pw}
             self._log("POST", p, 200, f"{profile.get('login')} -> {status}")
             return self._send(200, USERS[uid])
         m = re.match(r"^/api/v1/users/([^/]+)$", p)
         if m and m.group(1) in USERS:
             usr = USERS[m.group(1)]
+            if usr["status"] == "DEPROVISIONED" and body.get("profile"):
+                self._log("POST", p, 403, f"{usr['profile'].get('login')} profile update refused: DEPROVISIONED")
+                return self._send(403, {"errorCode": "E0000007", "errorSummary": "Cannot update a deprovisioned user"})
             usr["profile"].update(body.get("profile", {}))
+            if (body.get("credentials") or {}).get("password", {}).get("value"):
+                usr["_pw"] = True
+                if usr["status"] == "PROVISIONED":
+                    usr["status"] = "ACTIVE"
             usr["lastUpdated"] = now()
             self._log("POST", p, 200, f"update {usr['profile'].get('login')}")
             return self._send(200, usr)
@@ -106,12 +119,16 @@ class H(BaseHTTPRequestHandler):
         if m and m.group(1) in USERS:
             usr, op = USERS[m.group(1)], m.group(2)
             new = {"deactivate": "DEPROVISIONED", "suspend": "SUSPENDED", "unsuspend": "ACTIVE", "reactivate": "PROVISIONED",
-                   "activate": "ACTIVE", "unlock": usr["status"]}.get(op)
+                   "activate": "ACTIVE" if usr.get("_pw") else "PROVISIONED", "unlock": usr["status"]}.get(op)
             if new is None:
                 return self._send(404, {"errorSummary": "unknown lifecycle op"})
-            if op == "suspend" and usr["status"] != "ACTIVE":
-                self._log("POST", p, 400, f"{usr['profile'].get('login')} cannot suspend from {usr['status']}")
-                return self._send(400, {"errorCode": "E0000001", "errorSummary": f"Cannot suspend user in status {usr['status']}"})
+            allowed = {"suspend": ("ACTIVE",), "unsuspend": ("SUSPENDED",), "activate": ("STAGED", "DEPROVISIONED"), "reactivate": ("DEPROVISIONED",),
+                       "deactivate": ("STAGED", "PROVISIONED", "ACTIVE", "SUSPENDED")}
+            if usr["status"] not in allowed.get(op, (usr["status"],)):
+                self._log("POST", p, 403, f"{usr['profile'].get('login')} cannot {op} from {usr['status']}")
+                return self._send(403, {"errorCode": "E0000016" if op == "activate" else "E0000001", "errorSummary": f"Cannot {op} user in status {usr['status']}"})
+            if op == "deactivate":
+                usr["_pw"] = False   # real Okta clears credentials on deactivation
             usr["status"], usr["lastUpdated"] = new, now()
             self._log("POST", p, 200, f"{usr['profile'].get('login')} -> {new}")
             return self._send(200, {} if op != "reactivate" else {"activationUrl": "https://mock.okta/welcome"})

@@ -133,6 +133,8 @@ class Config:
     def okta_prehire_days(self): return int(_env("OKTA_PREHIRE_DAYS", "14"))
     @property
     def okta_loa_action(self): return _env("OKTA_LOA_ACTION", "suspend").lower()  # suspend | none
+    @property
+    def okta_activation(self): return _env("OKTA_ACTIVATION", "password").lower()  # password | welcome
 
     # --- branding ---
     @property
@@ -156,6 +158,7 @@ class Config:
             "syncIntervalSeconds": self.okta_sync_interval,
             "preHireDays": self.okta_prehire_days,
             "loaAction": self.okta_loa_action,
+            "activation": self.okta_activation,
         }
 
 

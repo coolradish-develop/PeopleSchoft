@@ -86,9 +86,15 @@ OKTA_ORG_URL=https://dev-123456.okta.com
 OKTA_API_TOKEN=00abc...            # SSWS API token (Security > API > Tokens)
 OKTA_CUSTOM_ATTRS=off              # on = also send hireDate/terminationDate/jobCode/... (add them to the Okta user schema first)
 ```
-Per event the emulator looks the user up by `profile.employeeNumber` (fallback `profile.login`), then
-creates / partially updates the profile and applies the lifecycle call: `activate`, `suspend`,
-`unsuspend`, `deactivate`, `reactivate`. Base profile attributes used: login, email, firstName,
+Per event the emulator looks the user up (`GET /users/{login}`, then `profile.employeeNumber` search), then
+creates / partially updates the profile and applies the lifecycle calls, checking the user's current status
+before each one so Okta never gets a call it will refuse. Verified end to end against a real org: create,
+promote, transfer, rename, suspend, unsuspend, deactivate, reactivate.
+
+`OKTA_ACTIVATION=password` (default) sets a random, never-stored password on create and on rehire, because Okta
+leaves password-less users in PROVISIONED where suspend does not work and deactivation clears the password.
+`OKTA_ACTIVATION=welcome` skips that and lets Okta email the activation link instead (users stay PROVISIONED until
+they finish the welcome flow), which is how HR-driven provisioning usually behaves in production. Base profile attributes used: login, email, firstName,
 lastName, middleName, nickName, displayName, title, department, employeeNumber, managerId, manager,
 costCenter, organization, division, mobilePhone, primaryPhone, city, state, countryCode, userType,
 secondEmail.

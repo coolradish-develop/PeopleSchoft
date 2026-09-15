@@ -7,6 +7,7 @@ Modes (OKTA_MODE):
   identity-source  - Okta "Anything-as-a-Source": bulk-upsert / bulk-delete through an Identity Source session
 """
 import json
+import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +22,7 @@ MASK = "SSWS ****"
 class OktaClient:
     def __init__(self, cfg=None):
         self.cfg = cfg or config
+        self._ids = {}   # emplid -> Okta user id, remembered within a sync run
 
     # ------------------------------------------------------------------ mapping
     def profile_from_worker(self, worker, include_custom=None):
@@ -110,21 +112,60 @@ class OktaClient:
         return f"{self.cfg.okta_org_url}/api/v1/users{path}"
 
     def find_user(self, worker):
+        """Locate the Okta user. Order matters: /users?search= is eventually consistent (a user created a moment ago
+        may not be found yet), so try the strongly consistent reads first: the id cached in this run, then GET /users/{login}."""
+        cached = self._ids.get(worker["emplid"])
+        if cached:
+            status, body = self.request("GET", self.users_url(f"/{cached}"))
+            if status == 200 and isinstance(body, dict) and body.get("id"):
+                return body, None
+        if worker.get("workEmail"):
+            status, body = self.request("GET", self.users_url(f"/{urllib.parse.quote(worker['workEmail'])}"))
+            if status == 200 and isinstance(body, dict) and body.get("id"):
+                self._ids[worker["emplid"]] = body["id"]
+                return body, None
+            if status not in (200, 404):
+                return None, {"status": status, "body": body}
         q = urllib.parse.quote(f'profile.employeeNumber eq "{worker["emplid"]}"')
         status, body = self.request("GET", self.users_url(f"?search={q}&limit=1"))
         if status == 200 and isinstance(body, list) and body:
+            self._ids[worker["emplid"]] = body[0]["id"]
             return body[0], None
-        if status == 200 and worker.get("workEmail"):
-            q = urllib.parse.quote(f'profile.login eq "{worker["workEmail"]}"')
-            status, body = self.request("GET", self.users_url(f"?search={q}&limit=1"))
-            if status == 200 and isinstance(body, list) and body:
-                return body[0], None
-        if status not in (200,):
+        if status != 200:
             return None, {"status": status, "body": body}
         return None, None
 
+    # Okta lifecycle facts (verified against a real org): a user created without a password is PROVISIONED, not
+    # ACTIVE; suspend/unsuspend need ACTIVE; deactivate clears the password; activate on a DEPROVISIONED or STAGED
+    # user without a password yields PROVISIONED; setting a password on a PROVISIONED user makes it ACTIVE.
+    # OKTA_ACTIVATION=password (default): set a random password so users are ACTIVE immediately (demo friendly).
+    # OKTA_ACTIVATION=welcome: no password; Okta sends the activation email and the person completes the welcome flow.
+    REQUIRES = {"activate": ("STAGED", "DEPROVISIONED"), "reactivate": ("DEPROVISIONED",), "suspend": ("ACTIVE",),
+                "unsuspend": ("SUSPENDED",), "deactivate": ("STAGED", "PROVISIONED", "ACTIVE", "SUSPENDED", "RECOVERY", "PASSWORD_EXPIRED", "LOCKED_OUT"),
+                "password": ("PROVISIONED",)}
+
+    def _pw_mode(self):
+        return self.cfg.okta_activation != "welcome"
+
+    def _send_email(self):
+        return "true" if not self._pw_mode() else "false"
+
+    @staticmethod
+    def _random_password():
+        return secrets.token_urlsafe(18) + "aA1!"
+
+    def _lifecycle(self, uid, op, note):
+        url = self.users_url(f"/{uid}/lifecycle/{op}" + (f"?sendEmail={self._send_email()}" if op in ("activate", "reactivate", "deactivate") else ""))
+        return {"method": "POST", "url": url, "note": note, "op": op, "requires": self.REQUIRES[op]}
+
+    def _password_step(self, uid):
+        return {"method": "POST", "url": self.users_url(f"/{uid}"), "body": {"credentials": {"password": {"value": "<random, not stored>"}}},
+                "note": "Set a random password if the user is still PROVISIONED so it becomes ACTIVE (OKTA_ACTIVATION=password)",
+                "op": "password", "requires": self.REQUIRES["password"]}
+
     def plan_users_api(self, worker, existing=None):
-        """Return the ordered list of Users API calls for this worker. `existing` is the Okta user if known."""
+        """Ordered Users API calls for this worker. Lifecycle steps carry `requires` (allowed current statuses);
+        the executor re-reads the user before each one and skips steps whose precondition is not met."""
         desired = self.desired_status(worker)
         profile = self.profile_from_worker(worker)
         emplid = worker["emplid"]
@@ -136,28 +177,44 @@ class OktaClient:
             if desired == "DEPROVISIONED":
                 steps.append({"method": "-", "url": "-", "note": "No Okta user exists; nothing to deactivate"})
                 return steps
+            body = {"profile": profile}
+            if self._pw_mode():
+                body["credentials"] = {"password": {"value": "<random, not stored>"}}
             activate = "false" if desired == "STAGED" else "true"
-            steps.append({"method": "POST", "url": self.users_url(f"?activate={activate}"),
-                          "body": {"profile": profile},
-                          "note": "Create user" + (" as STAGED (pre-hire)" if desired == "STAGED" else " and activate")})
+            steps.append({"method": "POST", "url": self.users_url(f"?activate={activate}"), "body": body, "op": "create",
+                          "note": ("Create user as STAGED (pre-hire)" if desired == "STAGED" else
+                                   "Create user and activate" + (" (ACTIVE: random password set)" if self._pw_mode() else " (PROVISIONED until the welcome email is completed)"))})
             if desired == "SUSPENDED":
-                steps.append({"method": "POST", "url": self.users_url(f"/{uid}/lifecycle/suspend"), "note": "On leave -> suspend"})
+                steps.append(self._lifecycle(uid, "suspend", "On leave -> suspend (requires ACTIVE)"))
             return steps
-        steps.append({"method": "POST", "url": self.users_url(f"/{uid}"), "body": {"profile": profile},
-                      "note": "Partial profile update"})
-        if desired == "DEPROVISIONED" and current != "DEPROVISIONED":
-            steps.append({"method": "POST", "url": self.users_url(f"/{uid}/lifecycle/deactivate?sendEmail=false"),
-                          "note": "Terminated -> deactivate"})
-        elif desired == "SUSPENDED" and current in (None, "ACTIVE"):
-            steps.append({"method": "POST", "url": self.users_url(f"/{uid}/lifecycle/suspend"), "note": "On leave -> suspend"})
-        elif desired == "ACTIVE":
-            if current == "SUSPENDED":
-                steps.append({"method": "POST", "url": self.users_url(f"/{uid}/lifecycle/unsuspend"), "note": "Return from leave -> unsuspend"})
-            elif current == "DEPROVISIONED":
-                steps.append({"method": "POST", "url": self.users_url(f"/{uid}/lifecycle/reactivate?sendEmail=false"), "note": "Rehire -> reactivate"})
-            elif current in ("STAGED", "PROVISIONED"):
-                steps.append({"method": "POST", "url": self.users_url(f"/{uid}/lifecycle/activate?sendEmail=false"), "note": "Start date reached -> activate"})
+        update = {"method": "POST", "url": self.users_url(f"/{uid}"), "body": {"profile": profile}, "op": "update", "note": "Partial profile update"}
+        if desired == "DEPROVISIONED":
+            if current != "DEPROVISIONED":
+                steps.append(update)
+                steps.append(self._lifecycle(uid, "deactivate", "Terminated -> deactivate"))
+            else:
+                steps.append({"method": "-", "url": "-", "note": "Already DEPROVISIONED; Okta refuses profile updates on deprovisioned users"})
+            return steps
+        if current == "DEPROVISIONED":
+            # Okta returns 403 for profile updates on DEPROVISIONED users: activate first, then update.
+            steps.append(self._lifecycle(uid, "activate", "Rehire -> activate (before the profile update: Okta rejects updates on DEPROVISIONED users)"))
+        steps.append(update)
+        if desired == "STAGED":
+            return steps
+        # desired ACTIVE or SUSPENDED: bring the user to ACTIVE first
+        if current == "SUSPENDED":
+            steps.append(self._lifecycle(uid, "unsuspend", "Return from leave -> unsuspend"))
+        elif current == "STAGED":
+            steps.append(self._lifecycle(uid, "activate", "Start date reached -> activate"))
+        if self._pw_mode() and current in ("DEPROVISIONED", "STAGED", "PROVISIONED"):
+            steps.append(self._password_step(uid))
+        if desired == "SUSPENDED" and current != "SUSPENDED":
+            steps.append(self._lifecycle(uid, "suspend", "On leave -> suspend (requires ACTIVE)"))
         return steps
+
+    def _status(self, uid):
+        st, body = self.request("GET", self.users_url(f"/{uid}"))
+        return body.get("status") if st == 200 and isinstance(body, dict) else None
 
     def execute_users_api(self, worker):
         existing, err = self.find_user(worker)
@@ -165,14 +222,28 @@ class OktaClient:
             return False, {"step": "lookup", **err}, self.plan_users_api(worker)
         steps = self.plan_users_api(worker, existing)
         log = []
+        uid = existing["id"] if existing else None
         for s in steps:
             if s["method"] in ("GET", "-"):
                 continue
-            status, body = self.request(s["method"], s["url"], s.get("body"))
-            log.append({"method": s["method"], "url": s["url"], "status": status, "note": s["note"],
-                        "response": body if status >= 300 else {"id": body.get("id"), "status": body.get("status")} if isinstance(body, dict) else body})
+            body = s.get("body")
+            if s.get("op") in ("create", "password") and body and "credentials" in body:
+                body = {**body, "credentials": {"password": {"value": self._random_password()}}}
+            url = s["url"].replace("{userId}", uid or "{userId}")
+            if s.get("requires"):
+                cur = self._status(uid)
+                if cur not in s["requires"]:
+                    log.append({"method": s["method"], "url": url, "status": "skipped", "note": s["note"], "response": {"currentStatus": cur, "skippedBecause": f"requires one of {list(s['requires'])}"}})
+                    continue
+            status, resp = self.request(s["method"], url, body)
+            entry = {"method": s["method"], "url": url, "status": status, "note": s["note"],
+                     "response": resp if status >= 300 else {"id": resp.get("id"), "status": resp.get("status")} if isinstance(resp, dict) else resp}
+            log.append(entry)
             if status >= 300 or status == 0:
                 return False, log, steps
+            if s.get("op") == "create" and isinstance(resp, dict):
+                uid = resp.get("id")
+                self._ids[worker["emplid"]] = uid
         return True, log or [{"note": "nothing to do"}], steps
 
     # ------------------------------------------------------------------ Webhook (Okta Workflows API Endpoint)

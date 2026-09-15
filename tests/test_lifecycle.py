@@ -158,7 +158,11 @@ class OktaMappingTests(unittest.TestCase):
     def test_users_api_plan(self):
         w = hr.get_worker(self.conn, "100020")
         notes = [s["note"] for s in self.client.plan_users_api(w, existing={"id": "00u1", "status": "ACTIVE"})]
-        self.assertIn("On leave -> suspend", notes)
+        self.assertIn("On leave -> suspend (requires ACTIVE)", notes)
+        notes = [s["note"] for s in self.client.plan_users_api(hr.get_worker(self.conn, "100011"), existing={"id": "00u1", "status": "DEPROVISIONED"})]
+        self.assertTrue(any(n.startswith("Rehire -> activate") for n in notes))
+        self.assertLess([n.startswith("Rehire -> activate") for n in notes].index(True), notes.index("Partial profile update"))
+        self.assertTrue(any("random password" in n for n in notes))
         w = hr.get_worker(self.conn, "100026")
         notes = [s["note"] for s in self.client.plan_users_api(w, existing={"id": "00u1", "status": "ACTIVE"})]
         self.assertIn("Terminated -> deactivate", notes)
