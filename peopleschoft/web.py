@@ -812,6 +812,11 @@ curl -H "Authorization: Bearer {e(tok)}" {e(base)}/hr/scim/v1/ServiceProviderCon
 <pre>curl -u {e(config.api_user)}:{e(config.api_password)} "{e(base)}/api/v1/export/sql?dialect=postgres" | psql "postgresql://hr:hr@localhost:5432/hrmaster"
 python3 -m peopleschoft export-sql --dialect mysql &gt; hr_master.sql
 python3 scripts/generate_docker.py --with-hr-db --force   # compose: Postgres + a mirror job that loads the export every {cfg['sqlExportInterval']}s</pre>
+<b>Connection details for the app's Provisioning tab</b>
+<div class="fl" style="max-width:100%">{fld('Okta app instance:', cfg.get('opcAppId') or 'set OKTA_OPC_APP_ID', '')}{fld('Database type:', 'PostgreSQL' if (cfg['sqlExportDialect'] or 'postgres') == 'postgres' else cfg['sqlExportDialect'])}
+{fld('Host (as seen from the agent host):', cfg.get('hrDbHost') or 'set PS_HR_DB_HOST - the machine running hr-db, not localhost')}{fld('Port:', {'postgres': '5432', 'mysql': '3306', 'mssql': '1433', 'oracle': '1521', 'db2': '50000'}.get(cfg['sqlExportDialect'] or 'postgres', ''))}
+{fld('Database name:', 'hrmaster')}{fld('User / password:', 'okta_ops / (value of --okta-ops-password when the compose file was generated)' if (cfg['sqlExportDialect'] or 'postgres') == 'postgres' else 'hr / hr')}</div>
+{('<p><a class="btn" target="_blank" href="' + e(config.okta_org_url.replace('.oktapreview.com', '-admin.oktapreview.com').replace('.okta.com', '-admin.okta.com')) + '/admin/app/jdbc_on_prem/instance/' + e(cfg['opcAppId']) + '">Open the app in the Okta Admin Console</a></p>') if cfg.get('opcAppId') else ''}
 <b>Connector settings (Provisioning tab &gt; Schema discovery &amp; Import)</b>
 <table class="grid"><tr><th>Field</th><th>Value</th></tr>{crows}</table>
 <p class="muted">The mirror keeps the connector's requirements: soft deletes (<code>is_deleted</code>), an auto-updating <code>last_update_dttm</code> on every table (trigger on PostgreSQL/MySQL), and <code>account_status</code> for the Account Status Attribute. Dialects: postgres, mysql, mssql, oracle, db2. Needs Okta Identity Governance and the EA features listed in Okta's guide.</p>

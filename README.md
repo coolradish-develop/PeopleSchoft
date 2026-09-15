@@ -192,6 +192,29 @@ checks all of that on the agent host (plain python3, exit code 1 on any FAIL):
 python3 opc_preflight.py --db postgres --db-host hr-db.example.com --jdbc /opt/okta/jdbc/postgresql.jar --okta-org https://your-org.okta.com
 ```
 
+**Getting the connector running, end to end**
+
+1. `python3 scripts/generate_docker.py --with-hr-db --okta-ops-password '<strong password>' --force` then
+   `docker compose up -d --build`. This starts PeopleSchoft, the Postgres mirror on port 5432 with the
+   `okta_ops` admin user the connector logs in with, and the mirror job. Put the machine's host name or IP in
+   `PS_HR_DB_HOST` in `.env`: that is what the Okta agent host must reach, not `localhost`.
+2. Agent host. Okta supports the two agents on a dedicated RHEL 8/9/10 server that can reach the mirror on 5432
+   and Okta on 443. Copy `scripts/opc_preflight.py` there and run it until it shows no FAIL. For a demo only,
+   the compose file also has an `opc-agent` service (Red Hat UBI 9, JDK 21, OpenSSL 3): download the installers
+   from Admin Console > Settings > Downloads into `./agents/` (Okta Provisioning Agent rpm, On-prem Connector zip,
+   the PostgreSQL JDBC jar), set `OKTA_ORG_URL`, `OKTA_INSTALL_TOKEN` and `OKTA_AGENT_NAME` in `.env`, and run
+   `docker compose --profile agents up -d --build`. Registering the Provisioning Agent is interactive:
+   `docker compose exec opc-agent /opt/OktaProvisioningAgent/configure_agent.sh`. Containers are not an
+   Okta-supported topology for the agents; use the RHEL VM for anything Okta needs to support.
+3. In Okta, open the app (Applications > *On-prem Connector for Generic Databases*; set `OKTA_OPC_APP_ID` in `.env`
+   and the HR as a Source page links straight to it). General tab > Entitlement management > Enabled. Provisioning tab
+   > Enable provisioning, pick the SCIM agent, enter database type PostgreSQL, host `PS_HR_DB_HOST`, port 5432,
+   database `hrmaster`, user `okta_ops` and its password, then Connect agents.
+4. Paste the Schema discovery & Import and Database Operations values from the HR as a Source page (Get Users,
+   user ID column `emplid`, Get All Entitlements, Account Status Attribute `account_status` = `ACTIVE`,
+   Incremental Import with `last_update_dttm`), map attributes, and run an import. Run the Lifecycle Journey in
+   PeopleSchoft, wait one mirror cycle, import again, and the joiner, mover and leaver show up in Okta.
+
 Tables: `hr_worker` (one row per person, `account_status` ACTIVE/INACTIVE, `is_deleted`, `last_update_dttm`),
 `hr_entitlement` (departments, job codes, PeopleSoft roles), `hr_worker_entitlement` (assignments, soft-deleted on
 transfer), and view `hr_worker_v` (users plus a comma-separated `entitlements` column). Connector field values

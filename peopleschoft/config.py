@@ -107,10 +107,16 @@ class Config:
     @property
     def sql_export_dir(self): return Path(_env("PS_SQL_EXPORT_DIR", str(self.db_path.parent / "export")))
 
+    @property
+    def okta_opc_app_id(self): return _env("OKTA_OPC_APP_ID", "")
+    @property
+    def hr_db_host(self): return _env("PS_HR_DB_HOST", "")
+
     def hr_master_summary(self):
         return {"scimAuth": self.hr_scim_auth, "scimTokenSet": bool(self.hr_scim_token), "scimHeader": self.hr_scim_header,
                 "scimWriteback": self.hr_scim_writeback, "sqlExportDialect": self.sql_export_dialect or None,
-                "sqlExportInterval": self.sql_export_interval, "sqlExportDir": str(self.sql_export_dir)}
+                "sqlExportInterval": self.sql_export_interval, "sqlExportDir": str(self.sql_export_dir),
+                "opcAppId": self.okta_opc_app_id or None, "hrDbHost": self.hr_db_host or None}
 
     # --- Okta outbound ---
     @property
