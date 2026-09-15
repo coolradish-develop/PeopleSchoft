@@ -134,6 +134,37 @@ To show Okta provisioning *into* PeopleSoft user profiles, add an app in Okta:
 Users Okta assigns to the app appear under **User Profiles (SCIM)** as `PSOPRDEFN` rows, linked to
 the EMPLID by `employeeNumber` or work email. Deactivation locks the account (`ACCTLOCK=1`).
 
+### Okta Access Gateway (header-based sign-on to the UI)
+OAG authenticates users against Okta, then reverse-proxies to the app with identity headers. Real PeopleSoft reads
+such a header through Signon PeopleCode; this emulator does the same when `PS_UI_AUTH=header`:
+
+```
+PS_UI_AUTH=header
+PS_SSO_HEADER=PS_SSO_UID            # user id header (fallbacks: OAM_REMOTE_USER, REMOTE_USER, X-Forwarded-User)
+PS_SSO_SECRET=<random string>       # optional: OAG adds header PS_SSO_SECRET with this value; forged headers are rejected
+PS_SSO_TRUSTED_PROXIES=10.1.2.3/32  # optional: only accept SSO headers from the gateway's address
+PS_SSO_ADMIN_ROLES=HR Administrator,PeopleSoft Administrator
+```
+
+In OAG: add a **Header Based** application (or the PeopleSoft template), public domain = the URL users open,
+protected resource = this server. On the Attributes tab map `PS_SSO_UID` = `login`, `PS_SSO_EMAIL` = `email`,
+`PS_SSO_NAME` = `displayName`, `PS_SSO_GROUPS` = `groups`, plus a static `PS_SSO_SECRET` if you set one.
+
+What happens per request:
+* the headers are trusted only if the secret and proxy checks pass;
+* the user id is matched to a PeopleSoft user profile (`PSOPRDEFN`), or to a worker's business email, or created
+  just-in-time (`PS_SSO_AUTOCREATE=1`); locked profiles (deactivated by Okta over SCIM) are refused;
+* roles = `PSROLEUSER` rows plus the groups header. Members of `PS_SSO_ADMIN_ROLES` can change data; everyone else
+  gets a read-only UI. Changes are audited under the signed-on user;
+* the API keeps its Basic / Bearer auth and additionally accepts the gateway headers; SCIM is unaffected.
+
+**Sign-on Status** (NavBar, or `/signon`) shows the headers received, the resolved user and roles, and the OAG
+setup steps. **Sign out** goes to `PS_SSO_LOGOUT_URL`.
+
+No gateway handy? `python3 scripts/mock_oag.py --port 8443 --upstream http://localhost:8080` is a tiny OAG stand-in:
+open http://localhost:8443, pick a user and groups on the fake Okta sign-in page, and it proxies to the app with the
+headers injected (add `--secret` to match `PS_SSO_SECRET`).
+
 ### No Okta tenant? Use the mock
 ```
 make mock-okta                           # fake Okta org on http://localhost:9090
@@ -206,7 +237,8 @@ peopleschoft/
   seed_data.py  the GBI demo organisation      scim.py      SCIM 2.0 server (inbound)
   api.py        REST + IB aliases + SCIM routes web.py      PeopleSoft-style UI
   server.py     HTTP server, auth, sync thread journey.py   guided joiner/mover/leaver/rehire
-scripts/mock_okta.py      fake Okta org        scripts/demo_journey.sh   curl walk-through
+scripts/mock_okta.py      fake Okta org        scripts/mock_oag.py       fake Okta Access Gateway (header SSO)
+scripts/demo_journey.sh   curl walk-through    peopleschoft/sso.py       header-based sign-on
 tests/test_lifecycle.py   unit + HTTP tests    data/peopleschoft.db      the database (auto-created)
 ```
 
@@ -219,4 +251,4 @@ tests/test_lifecycle.py   unit + HTTP tests    data/peopleschoft.db      the dat
   and the deactivation on the date. All of that happens in the background sync, so leave the server running
   or run `okta-sync` on a schedule.
 * SCIM Groups are not implemented (Okta only needs Users for push provisioning).
-* The UI has no login; the API and SCIM endpoints do. Change the defaults in `.env` before exposing it.
+* The UI is open by default (`PS_UI_AUTH=off`); put it behind Okta Access Gateway with `PS_UI_AUTH=header`. The API and SCIM endpoints always require auth. Change the default secrets in `.env` before exposing anything.

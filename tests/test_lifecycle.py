@@ -34,6 +34,9 @@ class SeedTests(unittest.TestCase):
     def setUp(self):
         self.conn = fresh_conn()
 
+    def tearDown(self):
+        self.conn.close()
+
     def test_seed_counts_and_scenarios(self):
         workers, total = hr.list_workers(self.conn)
         self.assertEqual(total, 32)
@@ -268,3 +271,107 @@ class HttpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SSOTests(unittest.TestCase):
+    """Header-based sign-on for Okta Access Gateway."""
+
+    def setUp(self):
+        self.conn = fresh_conn()
+        for k in ("PS_SSO_SECRET", "PS_SSO_TRUSTED_PROXIES", "PS_SSO_AUTOCREATE"):
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        self.conn.close()
+        for k in ("PS_SSO_SECRET", "PS_SSO_TRUSTED_PROXIES", "PS_SSO_AUTOCREATE"):
+            os.environ.pop(k, None)
+
+    def test_no_header_is_rejected(self):
+        from peopleschoft import sso
+        with self.assertRaises(sso.SSOError) as cm:
+            sso.authenticate(self.conn, {}, "127.0.0.1")
+        self.assertEqual(cm.exception.status, 401)
+
+    def test_seeded_profile_and_roles(self):
+        from peopleschoft import sso
+        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com"}, "127.0.0.1")
+        self.assertEqual((p.oprid, p.emplid, p.is_admin, p.created), ("margaret.chen@gbi.example.com", "100001", False, False))
+        p = sso.authenticate(self.conn, {"PS-SSO-UID": "margaret.chen@gbi.example.com", "PS_SSO_GROUPS": "Everyone, HR Administrator"}, "127.0.0.1")
+        self.assertTrue(p.is_admin)
+        self.assertIn("HR Administrator", p.roles)
+        self.assertIsNotNone(db.row(self.conn, "SELECT LASTSIGNONDTTM FROM PSOPRDEFN WHERE OPRID=?", (p.oprid,))["LASTSIGNONDTTM"])
+
+    def test_fallback_header_and_jit(self):
+        from peopleschoft import sso
+        p = sso.authenticate(self.conn, {"OAM_REMOTE_USER": "hannah.schmidt@gbi.example.com"}, "127.0.0.1")
+        self.assertEqual((p.emplid, p.created, p.header_name), ("100011", True, "OAM_REMOTE_USER"))
+        p = sso.authenticate(self.conn, {"PS_SSO_UID": "someone@okta.example", "PS_SSO_NAME": "Some One"}, "127.0.0.1")
+        self.assertEqual((p.emplid, p.created, p.name), ("", True, "Some One"))
+        os.environ["PS_SSO_AUTOCREATE"] = "0"
+        with self.assertRaises(sso.SSOError) as cm:
+            sso.authenticate(self.conn, {"PS_SSO_UID": "nobody@okta.example"}, "127.0.0.1")
+        self.assertEqual(cm.exception.status, 403)
+
+    def test_secret_and_trusted_proxies(self):
+        from peopleschoft import sso
+        os.environ["PS_SSO_SECRET"] = "s3cret"
+        with self.assertRaises(sso.SSOError):
+            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com"}, "127.0.0.1")
+        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com", "PS_SSO_SECRET": "s3cret"}, "127.0.0.1")
+        self.assertEqual(p.emplid, "100001")
+        os.environ["PS_SSO_TRUSTED_PROXIES"] = "10.0.0.0/8, 192.168.1.5"
+        with self.assertRaises(sso.SSOError):
+            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com", "PS_SSO_SECRET": "s3cret"}, "127.0.0.1")
+        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com", "PS_SSO_SECRET": "s3cret"}, "10.20.30.40")
+        self.assertEqual(p.emplid, "100001")
+
+    def test_locked_profile(self):
+        from peopleschoft import sso
+        self.conn.execute("UPDATE PSOPRDEFN SET ACCTLOCK=1 WHERE OPRID='margaret.chen@gbi.example.com'")
+        self.conn.commit()
+        with self.assertRaises(sso.SSOError) as cm:
+            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com"}, "127.0.0.1")
+        self.assertIn("locked", cm.exception.detail)
+
+
+class SSOHttpTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        fresh_conn().close()
+        os.environ["PS_UI_AUTH"] = "header"
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        os.environ.pop("PS_UI_AUTH", None)
+        cls.httpd.server_close()
+
+    def get(self, path, headers=None, method="GET", data=None):
+        req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as ex:
+            return ex.code, ex.read().decode()
+
+    def test_ui_requires_gateway_headers(self):
+        self.assertEqual(self.get("/employees")[0], 401)
+        st, body = self.get("/employees/100001", {"PS_SSO_UID": "margaret.chen@gbi.example.com"})
+        self.assertEqual(st, 200)
+        self.assertIn("Read only", body)
+        st, _ = self.get("/employees/100001/personal", {"PS_SSO_UID": "margaret.chen@gbi.example.com"}, "POST", b"firstName=M&lastName=C")
+        self.assertEqual(st, 403)
+        st, body = self.get("/employees/100001/personal", {"PS_SSO_UID": "margaret.chen@gbi.example.com", "PS_SSO_GROUPS": "HR Administrator"},
+                            "POST", b"firstName=Margaret&lastName=Chen&preferredFirstName=Maggie&workEmail=margaret.chen@gbi.example.com")
+        self.assertIn(st, (200, 303))   # urllib follows the 303 to the saved page
+        self.assertIn("Saved", body) if st == 200 else None
+        self.assertEqual(self.get("/signon", {"PS_SSO_UID": "margaret.chen@gbi.example.com"})[0], 200)
+
+    def test_api_auth_still_works_in_gateway_mode(self):
+        basic = {"Authorization": "Basic " + base64.b64encode(b"PS:PS").decode()}
+        self.assertEqual(self.get("/api/v1/workers", basic)[0], 200)
+        self.assertEqual(self.get("/api/v1/workers", {"PS_SSO_UID": "margaret.chen@gbi.example.com"})[0], 200)
+        self.assertEqual(self.get("/api/v1/workers")[0], 401)
+        self.assertEqual(self.get("/scim/v2/Users", {"Authorization": "Bearer peopleschoft-scim-token"})[0], 200)

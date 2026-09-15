@@ -9,7 +9,7 @@ import traceback
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import db, hr, okta
+from . import db, hr, okta, sso
 from .config import config
 from .routing import BadRequest, Request, Response, json_response, match
 from .scim import ScimError
@@ -31,6 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host") or f"localhost:{config.port}"
         proto = self.headers.get("X-Forwarded-Proto", "http")
         req = Request(self.command, self.path, self.headers, body, f"{proto}://{host}")
+        req.client_ip = self.client_address[0]
         resp = self._handle(req)
         self.send_response(resp.status)
         for k, v in resp.headers.items():
@@ -48,12 +49,15 @@ class Handler(BaseHTTPRequestHandler):
             if req.path.startswith("/scim/"):
                 return json_response(ScimError(404, "Not found").body(), 404, "application/scim+json")
             return Response("<h1>404 Not Found</h1>", 404)
-        auth_err = check_auth(req)
-        if auth_err:
-            return auth_err
         conn = db.connect()
         try:
             with db._lock:
+                auth_err = check_auth(req, conn)
+                if auth_err:
+                    return auth_err
+                gate = gateway_signon(req, conn)
+                if gate:
+                    return gate
                 return fn(req, conn, **params)
         except hr.HRError as ex:
             if req.path.startswith(("/api/", "/PSIGW/")):
@@ -73,8 +77,35 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = _dispatch
 
 
-def check_auth(req):
-    """API + PSIGW: Basic (PS_API_USER/PS_API_PASSWORD) or Bearer PS_API_TOKEN. SCIM: Bearer PS_SCIM_TOKEN. UI: open."""
+API_PATHS = ("/api/", "/PSIGW/")
+SIGNON_PATHS = ("/signon", "/signout")
+
+
+def gateway_signon(req, conn):
+    """PS_UI_AUTH=header: every UI request must carry the gateway identity headers (Okta Access Gateway)."""
+    if config.ui_auth != "header" or req.path.startswith("/scim/"):
+        return None
+    if req.user is None and req.path.startswith(API_PATHS):
+        return None   # API request already authenticated by Basic/Bearer in check_auth
+    if req.user is None:
+        try:
+            req.user = sso.authenticate(conn, req.headers, req.client_ip)
+        except sso.SSOError as ex:
+            if req.path.startswith(API_PATHS):
+                return json_response({"error": ex.detail, "title": ex.title}, ex.status)
+            return web.sso_error_page(req, ex)
+    if req.method not in ("GET", "HEAD") and not req.user.is_admin and req.path not in SIGNON_PATHS:
+        detail = (f"{req.user.oprid} is signed on but has no administrator role. Roles: {', '.join(req.user.roles) or 'none'}. "
+                  f"Administrator roles: {config.sso_admin_roles}.")
+        if req.path.startswith(API_PATHS):
+            return json_response({"error": detail, "title": "Not authorized"}, 403)
+        return web.sso_error_page(req, sso.SSOError(403, "Not authorized", detail))
+    return None
+
+
+def check_auth(req, conn=None):
+    """API + PSIGW: Basic (PS_API_USER/PS_API_PASSWORD), Bearer PS_API_TOKEN, or (when PS_UI_AUTH=header) the
+    gateway identity headers. SCIM: Bearer PS_SCIM_TOKEN. UI: open unless PS_UI_AUTH=header."""
     p = req.path
     header = req.headers.get("Authorization", "")
     if p.startswith("/scim/"):
@@ -93,6 +124,12 @@ def check_auth(req):
                 user = pw = None
             if user == config.api_user and pw == config.api_password:
                 return None
+        if config.ui_auth == "header" and conn is not None and sso.identity_from_headers(req.headers)[0]:
+            try:
+                req.user = sso.authenticate(conn, req.headers, req.client_ip)
+                return None
+            except sso.SSOError as ex:
+                return json_response({"error": ex.detail, "title": ex.title}, ex.status)
         return Response(json.dumps({"error": "Unauthorized. Use Basic auth (PS_API_USER/PS_API_PASSWORD) or Bearer PS_API_TOKEN."}),
                         401, "application/json", {"WWW-Authenticate": f'Basic realm="{config.brand} Integration Broker"'})
     return None
@@ -178,6 +215,7 @@ def banner(host, port):
   API docs      http://localhost:{port}/api-docs
   Database      {config.db_path}
   Okta mode     {o['mode']}   org={o['orgUrl']}   token={'set' if o['apiTokenSet'] else 'NOT SET'}   sync every {o['syncIntervalSeconds']}s
+  UI sign-on    {'header-based (Okta Access Gateway): user id from ' + config.sso_header + ', trusted proxies ' + (config.sso_trusted_proxies or 'any') + ', secret ' + ('set' if config.sso_secret else 'not set') if config.ui_auth == 'header' else 'off (open UI; set PS_UI_AUTH=header for Okta Access Gateway)'}
   Live reload   {'on (PS_RELOAD=1): edits to peopleschoft/*.py restart the server' if config.reload else 'off (set PS_RELOAD=1 to restart on code changes)'}
   Listening on  {host}:{port}
 ==================================================================

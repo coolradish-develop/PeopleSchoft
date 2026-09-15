@@ -17,6 +17,8 @@ test:         ## Run the unit tests
 	python3 -m unittest -v
 mock-okta:    ## Start a fake Okta org on :9090 (users / webhook / identity-source modes work against it)
 	python3 scripts/mock_okta.py --port 9090
+mock-oag:     ## Start a fake Okta Access Gateway on :8443 in front of the app (header-based SSO demo)
+	python3 scripts/mock_oag.py --port 8443 --upstream http://localhost:$(PORT)
 journey:      ## Drive the lifecycle journey with curl against a running server
 	./scripts/demo_journey.sh http://localhost:$(PORT)
 docker-files: ## Generate Dockerfile, docker-compose.yml and .dockerignore

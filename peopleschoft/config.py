@@ -57,6 +57,36 @@ class Config:
     @property
     def api_token(self): return _env("PS_API_TOKEN", "peopleschoft-api-token")
 
+    # --- UI sign-on: off (open) | header (Okta Access Gateway / reverse-proxy header auth) ---
+    @property
+    def ui_auth(self): return _env("PS_UI_AUTH", "off").lower()
+    @property
+    def sso_header(self): return _env("PS_SSO_HEADER", "PS_SSO_UID")
+    @property
+    def sso_email_header(self): return _env("PS_SSO_EMAIL_HEADER", "PS_SSO_EMAIL")
+    @property
+    def sso_name_header(self): return _env("PS_SSO_NAME_HEADER", "PS_SSO_NAME")
+    @property
+    def sso_groups_header(self): return _env("PS_SSO_GROUPS_HEADER", "PS_SSO_GROUPS")
+    @property
+    def sso_secret_header(self): return _env("PS_SSO_SECRET_HEADER", "PS_SSO_SECRET")
+    @property
+    def sso_secret(self): return _env("PS_SSO_SECRET", "")
+    @property
+    def sso_trusted_proxies(self): return _env("PS_SSO_TRUSTED_PROXIES", "")
+    @property
+    def sso_autocreate(self): return _bool("PS_SSO_AUTOCREATE", True)
+    @property
+    def sso_admin_roles(self): return _env("PS_SSO_ADMIN_ROLES", "PeopleSoft Administrator,HR Administrator,Okta Administrators")
+    @property
+    def sso_logout_url(self): return _env("PS_SSO_LOGOUT_URL", "/oag/logout")
+
+    def sso_summary(self):
+        return {"uiAuth": self.ui_auth, "uidHeader": self.sso_header, "emailHeader": self.sso_email_header, "nameHeader": self.sso_name_header,
+                "groupsHeader": self.sso_groups_header, "secretHeader": self.sso_secret_header, "secretSet": bool(self.sso_secret),
+                "trustedProxies": self.sso_trusted_proxies or "(any)", "autocreate": self.sso_autocreate,
+                "adminRoles": self.sso_admin_roles, "logoutUrl": self.sso_logout_url}
+
     # --- SCIM inbound (Okta -> PeopleSoft user profiles) ---
     @property
     def scim_token(self): return _env("PS_SCIM_TOKEN", "peopleschoft-scim-token")

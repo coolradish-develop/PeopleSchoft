@@ -35,6 +35,8 @@ class Request:
         self.body = body or b""
         self.base_url = base_url
         self._json = None
+        self.user = None          # Principal when signed on through the gateway (PS_UI_AUTH=header)
+        self.client_ip = ""
 
     def json(self):
         if self._json is None:

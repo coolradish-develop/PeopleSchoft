@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS PSOPRDEFN (
   OPRID TEXT PRIMARY KEY, SCIM_ID TEXT UNIQUE, EMPLID TEXT DEFAULT '',
   OPRDEFNDESC TEXT, EMAILID TEXT, FIRST_NAME TEXT, LAST_NAME TEXT,
   ACCTLOCK INTEGER DEFAULT 0, EXTERNAL_ID TEXT, RAW_JSON TEXT,
-  CREATED_DTTM TEXT, LASTUPDDTTM TEXT
+  CREATED_DTTM TEXT, LASTUPDDTTM TEXT, LASTSIGNONDTTM TEXT
 );
 CREATE TABLE IF NOT EXISTS PSROLEUSER (ROLEUSER TEXT NOT NULL, ROLENAME TEXT NOT NULL, PRIMARY KEY (ROLEUSER, ROLENAME));
 CREATE TABLE IF NOT EXISTS PS_OKTA_EVENTS (
@@ -100,9 +100,18 @@ def connect(path=None):
     return conn
 
 
+MIGRATIONS = [
+    ("PSOPRDEFN", "LASTSIGNONDTTM", "ALTER TABLE PSOPRDEFN ADD COLUMN LASTSIGNONDTTM TEXT"),
+]
+
+
 def init_db(conn):
     with _lock:
         conn.executescript(SCHEMA)
+        for table, column, ddl in MIGRATIONS:
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if column not in cols:
+                conn.execute(ddl)
         conn.commit()
 
 

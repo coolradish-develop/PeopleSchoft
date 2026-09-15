@@ -19,6 +19,7 @@ a{color:#0b5cad;text-decoration:none}a:hover{text-decoration:underline}
 .pthdr .brand small{font-weight:400;font-size:10px;color:#a9b8c8;margin-left:6px;vertical-align:middle;border:1px solid #3d5a7a;border-radius:3px;padding:1px 4px}
 .pthdr .title{flex:1;text-align:center;display:flex;align-items:baseline;justify-content:center;gap:14px}
 .pthdr .brandbig{font-size:22px;font-weight:700;letter-spacing:.5px;color:#fff}.pthdr .pgname{font-size:15px;font-weight:400;color:#c9d6e3}
+.pthdr .who-wrap{display:flex;gap:4px;margin-right:10px}.pthdr .who{color:#fff;font-size:12px;line-height:1.2;padding:4px 10px;border-radius:14px;background:#1c3a5e;display:flex;flex-direction:column;justify-content:center}.pthdr .who small{font-size:10px;color:#a9b8c8}.pthdr .who:hover{text-decoration:none;background:#274b75}
 .pthdr .icons{display:flex;gap:6px}.pthdr .icons a,.pthdr .icons label{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .pthdr .icons a:hover,.pthdr .icons label:hover{background:#1c3a5e}.pthdr .icons svg{width:20px;height:20px;fill:#fff}
 #navtoggle{display:none}.navbar{position:fixed;top:0;right:-300px;width:290px;height:100%;background:#fff;box-shadow:-2px 0 8px rgba(0,0,0,.3);transition:right .2s;z-index:50;overflow:auto}
@@ -97,15 +98,26 @@ LOOKUP = '<span class="lk" title="Look up">' + SVG_SEARCH + '</span>'
 
 NAV = [("/", "Homepage", "HM"), ("/employees", "Job Data", "JD"), ("/hire", "Add Employment Instance", "AE"),
        ("/journey", "Lifecycle Journey", "LJ"), ("/okta", "Okta Integration", "OK"), ("/users", "User Profiles", "UP"),
-       ("/setup", "Foundation Tables", "FT"), ("/api-docs", "Integration Broker / API", "IB")]
+       ("/setup", "Foundation Tables", "FT"), ("/api-docs", "Integration Broker / API", "IB"), ("/signon", "Sign-on Status (OAG)", "SO")]
 
 
-def header(title):
+def _oprid(req):
+    return req.user.oprid if getattr(req, "user", None) else "PS"
+
+
+def header(title, req=None):
     links = "".join(f'<a href="{p}"><span class="ico">{ico}</span>{n}</a>' for p, n, ico in NAV)
+    u = getattr(req, "user", None)
+    if u:
+        who = f'<a class="who" href="/signon" title="Signed on through Okta Access Gateway">{e(u.name or u.oprid)}<small>{"Administrator" if u.is_admin else "Read only"} &middot; via gateway</small></a><a class="who" href="/signout">Sign out</a>'
+    elif config.ui_auth == "header":
+        who = '<a class="who" href="/signon">Not signed on</a>'
+    else:
+        who = '<a class="who" href="/signon" title="UI sign-on is off (PS_UI_AUTH=off)">User PS<small>open UI</small></a>'
     return f"""<input type="checkbox" id="navtoggle"><div class="navbar"><h3>{e(config.brand)} NavBar</h3><label for="navtoggle" class="close">Close &times;</label>{links}
 <a href="http://localhost:9090" target="_blank"><span class="ico" style="background:#0b5cad">MO</span>Mock Okta (if running)</a></div>
 <div class="pthdr"><a class="home" href="/" title="Home">{SVG_HOME}</a><div class="title"><span class="brandbig">{e(config.brand)}</span><span class="pgname">{e(title)}</span></div>
-<div class="icons"><a href="/employees" title="Search">{SVG_SEARCH}</a><a href="/okta" title="Notifications">{SVG_BELL}</a><label for="navtoggle" title="NavBar">{SVG_NAV}</label></div></div>"""
+<div class="who-wrap">{who}</div><div class="icons"><a href="/employees" title="Search">{SVG_SEARCH}</a><a href="/okta" title="Notifications">{SVG_BELL}</a><label for="navtoggle" title="NavBar">{SVG_NAV}</label></div></div>"""
 
 
 def layout(req, title, body, crumb="", active="/", fluid=False, header_title=None):
@@ -116,7 +128,7 @@ def layout(req, title, body, crumb="", active="/", fluid=False, header_title=Non
     else:
         content = f'<div class="crumbs">{crumb or "<b>" + e(title) + "</b>"}</div>{banner}<div class="page">{body}</div><div class="muted" style="padding:0 14px 14px">{e(config.brand)} &middot; PeopleSoft HCM emulator for identity lifecycle demos &middot; Okta mode {e(config.okta_mode)}</div>'
     return html_response(f"""<!doctype html><html><head><meta charset="utf-8"><title>{e(config.brand)} - {e(title)}</title><style>{CSS}</style></head>
-<body>{header(header_title or ("Workforce Administrator" if fluid else title))}{content}</body></html>""")
+<body>{header(header_title or ("Workforce Administrator" if fluid else title), req)}{content}</body></html>""")
 
 
 def status_badge(w):
@@ -394,7 +406,7 @@ def employee_job_post(req, conn, emplid):
     if action == "PAY" and "compRate" not in data:
         return redirect(f"/employees/{emplid}?tab=work&insert=1", err="Pay Rate Change (PAY) requires a new Compensation Rate.")
     try:
-        w = hr.generic_action(conn, emplid, data, oprid="PS", source="UI")
+        w = hr.generic_action(conn, emplid, data, oprid=_oprid(req), source="UI")
     except hr.HRError as ex:
         return redirect(f"/employees/{emplid}?tab=work&insert=1", err=str(ex))
     if config.okta_sync_interval <= 0:
@@ -435,7 +447,7 @@ def personal_page(req, conn, emplid):
 def personal_post(req, conn, emplid):
     data = req.form()
     try:
-        hr.update_personal(conn, emplid, data, oprid="PS", source="UI")
+        hr.update_personal(conn, emplid, data, oprid=_oprid(req), source="UI")
     except hr.HRError as ex:
         return redirect(f"/employees/{emplid}/personal", err=str(ex))
     if config.okta_sync_interval <= 0:
@@ -479,7 +491,7 @@ def hire_form(req, conn):
 @route("POST", r"/hire")
 def hire_post(req, conn):
     data = {k: v for k, v in req.form().items() if v != ""}
-    w = hr.hire(conn, data, oprid="PS", source="UI")
+    w = hr.hire(conn, data, oprid=_oprid(req), source="UI")
     if config.okta_sync_interval <= 0:
         okta.sync_pending(conn)
     return redirect(f"/employees/{w['emplid']}", msg=f"Saved. {w['displayName']} hired as Empl ID {w['emplid']}. Okta event queued.")
@@ -516,7 +528,7 @@ def journey_page(req, conn):
 
 @route("POST", r"/journey/run")
 def journey_run(req, conn):
-    r = run_journey(conn, oprid="PS", source="UI")
+    r = run_journey(conn, oprid=_oprid(req), source="UI")
     okta.sync_pending(conn)
     return redirect(f"/journey?emplid={r['emplid']}", msg=f"Journey completed for {r['name']} (EMPLID {r['emplid']}); {len(r['steps'])} Okta events generated and synced.")
 
@@ -699,3 +711,59 @@ curl -u {e(u)}:{e(p)} "{e(base)}/api/v1/workers?changedSince=2026-01-01T00:00:00
 # Flush outbox to Okta
 curl -u {e(u)}:{e(p)} -X POST {e(base)}/api/v1/okta/sync</pre></div>"""
     return layout(req, "API Docs", "<div class=\"pgbody\">" + body + "</div>", "<b>API Reference</b>", "/api-docs")
+
+
+# ---------------- Sign-on status (Okta Access Gateway header auth)
+def sso_error_page(req, ex):
+    body = f"""<div class="pgtitle">{e(ex.title)}</div><div class="pgbody">
+<div class="grp"><div class="gh">PeopleSoft Sign-on</div><div class="gb"><p>{e(ex.detail)}</p>
+<p class="muted">Sign-on mode: header-based (PS_UI_AUTH=header). The application expects Okta Access Gateway to authenticate you and forward
+<code>{e(config.sso_header)}</code>{' plus the shared secret header <code>' + e(config.sso_secret_header) + '</code>' if config.sso_secret else ''}.</p>
+<p><a class="btn primary" href="/signon">Sign-on status</a> <a class="btn" href="{e(config.sso_logout_url)}">Sign out of the gateway</a></p></div></div></div>"""
+    from .routing import Response
+    page = layout(req, ex.title, body)
+    return Response(page.body, ex.status)
+
+
+@route("GET", r"/signon")
+def signon_page(req, conn):
+    from . import sso
+    cfg = config.sso_summary()
+    seen = sso.received_headers(req.headers)
+    hrows = "".join(f"<tr><td>{e(k)}</td><td>{e(v)}</td></tr>" for k, v in seen.items()) or '<tr><td colspan="2" class="muted">No SSO headers on this request</td></tr>'
+    crows = "".join(f"<tr><td>{e(k)}</td><td>{e(v)}</td></tr>" for k, v in cfg.items())
+    u = req.user
+    if u is None and config.ui_auth != "header" and sso.identity_from_headers(req.headers)[0]:
+        try:
+            u = sso.authenticate(conn, req.headers, req.client_ip)
+            note = "Headers were resolved for display only: PS_UI_AUTH is off, so the UI does not require them."
+        except sso.SSOError as ex:
+            note = f"Headers present but not accepted: {ex.detail}"
+    else:
+        note = "" if u else ("Not signed on." if config.ui_auth == "header" else "UI sign-on is off (open UI). Set PS_UI_AUTH=header to require Okta Access Gateway.")
+    if u:
+        who = f"""<div class="fl" style="max-width:100%">{fld('User ID (OPRID):', u.oprid)}{fld('Description:', u.name)}{fld('Email:', u.email)}
+{fld('Empl ID:', u.emplid or '', '' if not u.emplid else '')}{fld('Roles:', ', '.join(u.roles) or 'none')}{fld('Access:', 'Administrator (can change data)' if u.is_admin else 'Read only')}
+{fld('Identity header used:', u.header_name or '')}{fld('Profile created just-in-time:', 'Yes' if u.created else 'No')}{fld('Client address seen:', req.client_ip)}</div>"""
+        if u.emplid:
+            who += f'<p><a href="/employees/{e(u.emplid)}">Open my Job Data</a></p>'
+    else:
+        who = f'<p class="muted">{e(note)}</p>'
+    body = f"""<div class="pgtitle">Sign-on Status</div><div class="pgbody">
+<div class="grid2"><div class="grp"><div class="gh">Signed-on user</div><div class="gb">{who}{('<p class="muted">' + e(note) + '</p>') if u and note else ''}
+<p><a class="btn" href="{e(config.sso_logout_url)}">Sign out (gateway logout URL)</a></p></div></div>
+<div class="grp"><div class="gh">Headers received on this request</div><div class="gb"><table class="grid"><tr><th>Header</th><th>Value</th></tr>{hrows}</table>
+<p class="muted">Client address: {e(req.client_ip)}. Okta Access Gateway injects these after Okta sign-in; configure them under the application's Attributes tab.</p></div></div></div>
+<div class="grp"><div class="gh">Configuration (.env)</div><div class="gb"><table class="grid"><tr><th>Setting</th><th>Value</th></tr>{crows}</table></div></div>
+<div class="grp"><div class="gh">Okta Access Gateway setup</div><div class="gb"><ol style="margin:4px 0 0 18px;line-height:1.8">
+<li>OAG Admin console &rarr; Applications &rarr; Add &rarr; <b>Header Based</b> (or the PeopleSoft template). Public domain = the URL users will open; Protected web resource = this server.</li>
+<li>Attributes tab: add header <code>{e(config.sso_header)}</code> = Okta <code>login</code>, <code>{e(config.sso_email_header)}</code> = <code>email</code>, <code>{e(config.sso_name_header)}</code> = <code>displayName</code>, <code>{e(config.sso_groups_header)}</code> = <code>groups</code> (filtered to the PeopleSoft groups).</li>
+<li>Optional but recommended: add a static header <code>{e(config.sso_secret_header)}</code> with a random value and put the same value in <code>PS_SSO_SECRET</code>; set <code>PS_SSO_TRUSTED_PROXIES</code> to the gateway's address so nobody can bypass it with hand-made headers.</li>
+<li>Assign Okta users/groups to the OAG app. Members of a group named in <code>PS_SSO_ADMIN_ROLES</code> (e.g. <b>HR Administrator</b>) can change data; everyone else is read-only.</li>
+<li>Set <code>PS_UI_AUTH=header</code> and restart. Without a gateway, test with <code>python3 scripts/mock_oag.py</code>.</li></ol></div></div></div>"""
+    return layout(req, "Sign-on Status", body, 'PeopleTools &gt; Security &gt; <b>Sign-on Status</b>')
+
+
+@route("GET", r"/signout")
+def signout(req, conn):
+    return redirect(config.sso_logout_url)
