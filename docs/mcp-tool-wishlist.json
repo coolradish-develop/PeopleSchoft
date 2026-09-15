@@ -1,0 +1,386 @@
+{
+  "$schema": "https://modelcontextprotocol.io/schema/tools",
+  "document": "PeopleSchoft remote MCP server - tool wishlist",
+  "purpose": "Tools an agent needs to run, verify and reset a PeopleSchoft + Okta demo on a remote host without a human touching the VM. Grouped by priority; each tool names the command or endpoint that already implements it in the repo, so the server is mostly a thin wrapper.",
+  "server": {
+    "name": "peopleschoft-deploy",
+    "url": "https://osa-mcp.skylarbarnes.com/peopleschoft/mcp",
+    "transport": "http",
+    "auth": {
+      "type": "oauth2",
+      "issuer": "https://sledai.oktapreview.com/oauth2/aus10mahmrkHMOSxb1d8",
+      "client_id": "0oa13pfmyox1EPql41d8",
+      "scopes_existing": ["peopleschoft.read", "peopleschoft.deploy"],
+      "scopes_requested": ["peopleschoft.operate", "peopleschoft.destroy"],
+      "notes": "Split scopes so an agent can drive a demo (operate) without being able to reset or redeploy (destroy). Today both existing tools sit behind one scope."
+    },
+    "target_host": "predator",
+    "workdir": "/opt/peopleschoft",
+    "compose_services": ["peopleschoft", "hr-db", "hr-mirror", "opc-agent"]
+  },
+
+  "conventions": {
+    "result_shape": "Every tool returns {ok: boolean, summary: string, data: object, duration_ms: number}. summary is one line an agent can relay to a human verbatim.",
+    "errors": "On failure return ok=false with data.hint naming the fix, not a raw stack trace. Silent-success is the enemy: a reset that seeds nothing must report ok=false.",
+    "idempotency": "Tools marked idempotent may be retried safely after a timeout. Destructive tools must require confirm=true and must never be retried automatically.",
+    "secrets": "Never return OKTA_API_TOKEN, PS_API_PASSWORD, PS_SCIM_TOKEN or the okta_ops password in any field. Redact as '(set)' / '(empty)'.",
+    "timeouts": "Declare expected_duration_s; anything over 60s should stream progress via logs rather than blocking."
+  },
+
+  "existing_tools": [
+    {"name": "peopleschoft_deploy", "keep": true, "note": "pull a git ref and rebuild; see requested changes under improvements"},
+    {"name": "peopleschoft_status", "keep": true, "note": "container status; should gain pipeline freshness - see peopleschoft_pipeline_status"},
+    {"name": "peopleschoft_logs", "keep": true},
+    {"name": "peopleschoft_rollback", "keep": true}
+  ],
+
+  "tools": [
+
+    {
+      "name": "peopleschoft_reset",
+      "priority": "P0",
+      "group": "demo-state",
+      "description": "Drop the PeopleSchoft database and re-seed the demo org (32 GBI employees, effective-dated job history, pre-hires). This is the between-demos reset. Returns the counts actually seeded so a silent no-op is visible.",
+      "implementation": "docker compose exec -T peopleschoft python3 -m peopleschoft reset --yes  (equivalently POST /api/v1/admin/reset)",
+      "expected_duration_s": 10,
+      "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirm": {"type": "boolean", "description": "Must be true. Guards against an agent resetting mid-demo."},
+          "seed": {"type": "boolean", "default": true, "description": "Re-seed after dropping. false leaves an empty org, useful for a from-zero hiring demo."},
+          "email_domain": {"type": "string", "default": "atko.email", "description": "Overrides PS_EMAIL_DOMAIN for the seeded staff. Stale gbi.example.com addresses are the usual reason for a reset."},
+          "company": {"type": "string", "default": "GBI"},
+          "clear_okta_outbox": {"type": "boolean", "default": true, "description": "Also empty PS_OKTA_EVENTS so queued events from the previous demo do not fire."},
+          "restart_after": {"type": "boolean", "default": false, "description": "Restart the peopleschoft service afterwards. Needed if email_domain or company changed."}
+        },
+        "required": ["confirm"]
+      },
+      "returns": {"workers": "int", "departments": "int", "jobcodes": "int", "events_cleared": "int", "email_domain": "string"}
+    },
+
+    {
+      "name": "peopleschoft_snapshot",
+      "priority": "P0",
+      "group": "demo-state",
+      "description": "Save the current database and export state under a name, so a demo can be rehearsed and rewound without a full reset. Far better than reset when a specific mid-demo state is wanted.",
+      "implementation": "sqlite3 .backup of PS_DB_PATH into /opt/peopleschoft/snapshots/<name>.db plus a copy of data/export/",
+      "expected_duration_s": 5,
+      "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9-]{1,40}$", "description": "e.g. 'pre-demo' or 'after-joiner'"},
+          "overwrite": {"type": "boolean", "default": false},
+          "note": {"type": "string", "description": "Free text shown when listing snapshots"}
+        },
+        "required": ["name"]
+      }
+    },
+
+    {
+      "name": "peopleschoft_restore",
+      "priority": "P0",
+      "group": "demo-state",
+      "description": "Restore a named snapshot, replacing current HR state. Use between rehearsal runs to get back to a known-good starting point in seconds.",
+      "implementation": "stop peopleschoft, copy snapshot over PS_DB_PATH, start, force an export flush",
+      "expected_duration_s": 15,
+      "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "confirm": {"type": "boolean"},
+          "flush_after": {"type": "boolean", "default": true, "description": "Force the SQL export + mirror load so the database matches immediately instead of up to 60s later."}
+        },
+        "required": ["name", "confirm"]
+      }
+    },
+
+    {
+      "name": "peopleschoft_snapshots_list",
+      "priority": "P1",
+      "group": "demo-state",
+      "description": "List saved snapshots with name, age, size, worker count and note.",
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {"type": "object", "properties": {}}
+    },
+
+    {
+      "name": "peopleschoft_demo_run",
+      "priority": "P0",
+      "group": "demo-state",
+      "description": "Run the scripted joiner/mover/leaver/rehire journey end to end (HIR -> PRO -> XFR -> LOA -> RFL -> TER -> REH) against a throwaway person. Use to prove the stack works before a customer call.",
+      "implementation": "docker compose exec -T peopleschoft python3 -m peopleschoft demo  (or POST /api/v1/admin/journey)",
+      "expected_duration_s": 20,
+      "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cleanup": {"type": "boolean", "default": false, "description": "Terminate and remove the demo person afterwards"},
+          "emplid": {"type": "string", "description": "Reuse a specific employee instead of creating one"}
+        }
+      },
+      "returns": {"steps": "array of {action, effdt, empl_status, event_enqueued}"}
+    },
+
+    {
+      "name": "peopleschoft_hr_action",
+      "priority": "P0",
+      "group": "lifecycle",
+      "description": "Perform one HR lifecycle action, the same as a user clicking through Job Data. This is the tool that lets an agent actually drive a demo: hire a person, promote them, move them, terminate them.",
+      "implementation": "POST /api/v1/workers/{emplid}/{verb} (see worker_verb/worker_action in peopleschoft/api.py); hire is POST /api/v1/workers",
+      "expected_duration_s": 3,
+      "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["hire", "rehire", "promote", "transfer", "pay_change", "change_manager", "leave_of_absence", "return_from_leave", "terminate", "update_personal"],
+            "description": "Maps to PeopleSoft action codes HIR/REH/PRO/XFR/PAY/POS/LOA/RFL/TER/DTA"
+          },
+          "emplid": {"type": "string", "description": "Required for everything except hire"},
+          "effective_date": {"type": "string", "format": "date", "description": "Defaults to today. A future date is the pre-hire / notice-period demo: the row exists now, account_status flips on that date."},
+          "reason": {"type": "string", "description": "Action reason code, e.g. MER for a merit promotion, RES for resignation"},
+          "first_name": {"type": "string"},
+          "last_name": {"type": "string"},
+          "deptid": {"type": "string", "description": "e.g. 13000 Engineering, 13100 Platform Engineering"},
+          "jobcode": {"type": "string", "description": "e.g. SWE1, SWE2, ENGMGR"},
+          "location": {"type": "string", "description": "e.g. SFHQ, AUS01, REMOTE"},
+          "supervisor_id": {"type": "string"},
+          "comprate": {"type": "number"}
+        },
+        "required": ["action"]
+      },
+      "returns": {"emplid": "string", "user_name": "string", "effdt": "string", "effseq": "int", "empl_status": "string", "account_status": "string"}
+    },
+
+    {
+      "name": "peopleschoft_worker_list",
+      "priority": "P1",
+      "group": "lifecycle",
+      "description": "List or search workers with their current job row, so an agent can pick a realistic person for a demo step instead of guessing an emplid.",
+      "implementation": "GET /api/v1/workers",
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string", "description": "Name, emplid or login substring"},
+          "deptid": {"type": "string"},
+          "status": {"type": "string", "enum": ["A", "L", "P", "S", "T", "R"], "description": "Active, Leave, Pre-hire, Suspended, Terminated, Retired"},
+          "include_prehires": {"type": "boolean", "default": true},
+          "limit": {"type": "integer", "default": 50}
+        }
+      }
+    },
+
+    {
+      "name": "peopleschoft_worker_get",
+      "priority": "P1",
+      "group": "lifecycle",
+      "description": "One worker with full effective-dated job history and the Okta events queued for them. Use to prove a change landed before importing.",
+      "implementation": "GET /api/v1/workers/{emplid} plus /jobs and /events",
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "emplid": {"type": "string"},
+          "include_history": {"type": "boolean", "default": true},
+          "include_events": {"type": "boolean", "default": true}
+        },
+        "required": ["emplid"]
+      }
+    },
+
+    {
+      "name": "peopleschoft_pipeline_flush",
+      "priority": "P0",
+      "group": "pipeline",
+      "description": "Force the SQL export and the mirror load to run NOW instead of waiting for their 30s timers. Removes the up-to-60s dead air between an HR change and it being importable - the single biggest live-demo annoyance.",
+      "implementation": "POST /api/v1/export/sql to rewrite the file, then run the hr-mirror psql load once out of cycle",
+      "expected_duration_s": 8,
+      "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "wait_for_db": {"type": "boolean", "default": true, "description": "Block until the row is confirmed present in hr_worker_v"},
+          "verify_emplid": {"type": "string", "description": "If set, confirm this person is visible in the mirror before returning"}
+        }
+      },
+      "returns": {"export_written_at": "iso8601", "rows_loaded": "int", "verified": "boolean"}
+    },
+
+    {
+      "name": "peopleschoft_pipeline_status",
+      "priority": "P0",
+      "group": "pipeline",
+      "description": "Health of the whole chain in one call: app up, export file age, mirror load age, row counts in hr_worker_v, agent connected, last import time. Answers 'why did my import show nothing' without reading four logs.",
+      "implementation": "GET /api/v1/hr-master/status + file mtime + a count query on hrmaster + opc-agent log tail",
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {"type": "object", "properties": {"verbose": {"type": "boolean", "default": false}}},
+      "returns": {
+        "app": "up|down",
+        "export_age_s": "int",
+        "export_dialect": "string - empty means PS_SQL_EXPORT_DIALECT is unset and NOTHING will import",
+        "mirror_age_s": "int",
+        "hr_worker_rows": "int",
+        "agent": "connected|disconnected|not_installed",
+        "warnings": "array of strings"
+      }
+    },
+
+    {
+      "name": "peopleschoft_verify",
+      "priority": "P0",
+      "group": "pipeline",
+      "description": "Run the install self-check and return the failures with fixes. Catches the silent killers: empty PS_SQL_EXPORT_DIALECT, OKTA_MODE=users racing the connector, missing agent rpm or JDBC jar, stale export.",
+      "implementation": "python3 scripts/vm_setup.py --verify",
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {"type": "object", "properties": {}},
+      "returns": {"problems": "int", "checks": "array of {name, level: ok|warn|fail, message, fix}"}
+    },
+
+    {
+      "name": "peopleschoft_config_set",
+      "priority": "P1",
+      "group": "config",
+      "description": "Change a whitelisted .env value and restart the affected service. Mainly for flipping OKTA_MODE between dryrun and users, changing the email domain, or tightening the export interval before a demo.",
+      "implementation": "edit /opt/peopleschoft/.env, then docker compose up -d",
+      "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "object",
+            "description": "Only these keys may be set. Any other key must be rejected, not ignored.",
+            "propertyNames": {
+              "enum": ["OKTA_MODE", "PS_EMAIL_DOMAIN", "PS_COMPANY", "PS_SQL_EXPORT_DIALECT", "PS_SQL_EXPORT_INTERVAL", "OKTA_PREHIRE_DAYS", "OKTA_LOA_ACTION", "OKTA_ACTIVATION", "OKTA_OPC_APP_ID", "PS_UI_AUTH", "PS_RELOAD"]
+            }
+          },
+          "restart": {"type": "boolean", "default": true}
+        },
+        "required": ["values"]
+      }
+    },
+
+    {
+      "name": "peopleschoft_okta_app_users",
+      "priority": "P0",
+      "group": "okta",
+      "description": "List the users the connector has imported into the Okta app, with the mapped profile values. This is how an agent proves an import worked, rather than asking the human to look at the console.",
+      "implementation": "GET {OKTA_ORG_URL}/api/v1/apps/{OKTA_OPC_APP_ID}/users with the server-side SSWS token",
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "emplid": {"type": "string", "description": "Filter to one person by externalId"},
+          "include_ext_attributes": {"type": "boolean", "default": false, "description": "Return the discovered ext_* attributes. Useful when diagnosing blank-name mapping problems."},
+          "limit": {"type": "integer", "default": 50}
+        }
+      },
+      "returns": {"count": "int", "users": "array of {id, userName, externalId, status, firstName, lastName, title, department, manager}"}
+    },
+
+    {
+      "name": "peopleschoft_okta_import",
+      "priority": "P1",
+      "group": "okta",
+      "description": "Trigger an Okta import for the connector app and return what changed. BEST EFFORT: Okta does not expose a supported public API to start an app import, so implement against the admin endpoint used by the console and degrade gracefully - if it cannot be triggered, return ok=false with a hint telling the human to click Import Now.",
+      "implementation": "undocumented admin endpoint; fall back to instructing the human",
+      "expected_duration_s": 45,
+      "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {"type": "string", "enum": ["incremental", "full"], "default": "incremental"},
+          "auto_confirm": {"type": "boolean", "default": true},
+          "wait": {"type": "boolean", "default": true, "description": "Poll until the import job finishes"}
+        }
+      },
+      "returns": {"job_id": "string", "created": "int", "updated": "int", "deactivated": "int", "errors": "array"}
+    },
+
+    {
+      "name": "peopleschoft_okta_cleanup",
+      "priority": "P0",
+      "group": "okta",
+      "description": "Delete demo users created in Okta during previous runs, so the next demo starts clean. Deactivate-then-delete, matching how Okta requires it. Scoped by email domain and employee-number range so it cannot touch real accounts.",
+      "implementation": "GET /api/v1/users then POST /lifecycle/deactivate and DELETE, twice for DEPROVISIONED",
+      "expected_duration_s": 30,
+      "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirm": {"type": "boolean"},
+          "email_domain": {"type": "string", "default": "atko.email", "description": "Only users with logins on this domain are eligible"},
+          "emplids": {"type": "array", "items": {"type": "string"}, "description": "Explicit list. Safer than domain-wide."},
+          "exclude_logins": {"type": "array", "items": {"type": "string"}, "default": ["enrollment@atko.email", "rysky@atko.email", "ad.service@atko.email"], "description": "Never delete these - pre-existing accounts that share the demo domain"},
+          "dry_run": {"type": "boolean", "default": true, "description": "Default true. Return what would be deleted and require an explicit second call."}
+        },
+        "required": ["confirm"]
+      },
+      "returns": {"deleted": "array of logins", "skipped": "array of {login, reason}"}
+    },
+
+    {
+      "name": "peopleschoft_agent_status",
+      "priority": "P1",
+      "group": "okta",
+      "description": "On-prem SCIM agent state: registered, connected, version, last poll, and the tail of its log. Includes the device-authorization URL and code when registration is pending, so a human can be handed the approval link.",
+      "implementation": "docker compose logs opc-agent + GET {ORG}/api/v1/agentPools",
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {"type": "object", "properties": {"log_lines": {"type": "integer", "default": 20}}}
+    },
+
+    {
+      "name": "peopleschoft_agent_restart",
+      "priority": "P2",
+      "group": "okta",
+      "description": "Restart the agent container. Approval state lives in a volume, so this does not re-trigger device authorization.",
+      "implementation": "docker compose restart opc-agent",
+      "annotations": {"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {"type": "object", "properties": {"confirm": {"type": "boolean", "default": false}}}
+    },
+
+    {
+      "name": "peopleschoft_demo_preflight",
+      "priority": "P0",
+      "group": "demo-state",
+      "description": "One call before a customer call: verify, pipeline_status, agent_status and okta_app_users together, returning a single go/no-go with the specific blocking problem. Composite of the read-only tools so an agent does not have to orchestrate four calls and interpret them.",
+      "expected_duration_s": 20,
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
+      "inputSchema": {
+        "type": "object",
+        "properties": {"expect_worker_count": {"type": "integer", "default": 32}}
+      },
+      "returns": {"ready": "boolean", "blocking": "array of strings", "advisory": "array of strings"}
+    }
+  ],
+
+  "improvements_to_existing": [
+    {
+      "tool": "peopleschoft_deploy",
+      "asks": [
+        "Accept ref (branch/tag/sha) and return the sha actually deployed, not just success.",
+        "Return whether a rebuild was needed - with source mounts and PS_RELOAD most changes need no image rebuild.",
+        "Run peopleschoft_verify automatically after deploying and fail the deploy if the pipeline is broken.",
+        "Take preserve_data (default true) so a deploy never silently wipes demo state."
+      ]
+    },
+    {
+      "tool": "peopleschoft_status",
+      "asks": ["Include export/mirror freshness and worker counts, not only container state - container 'Up' while the export is stale is the common failure."]
+    },
+    {
+      "tool": "peopleschoft_logs",
+      "asks": ["service enum (peopleschoft|hr-db|hr-mirror|opc-agent), since duration, and grep filter, so an agent can pull only the agent's import errors."]
+    }
+  ],
+
+  "non_goals": [
+    "No tool should expose the Okta API token, the okta_ops password or PS_API_PASSWORD to the agent.",
+    "No tool should create or modify real (non-demo) Okta users; cleanup is scoped by domain and explicit exclusions.",
+    "No arbitrary shell execution on the host - every tool is a named operation with a typed schema."
+  ]
+}

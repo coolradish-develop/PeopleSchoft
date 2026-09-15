@@ -1,0 +1,761 @@
+{
+ "captured": "2026-09-15T19:54:35.496247Z",
+ "org": "https://sledai.oktapreview.com",
+ "app_id": "0oa13pcssqvxK1EHK1d8",
+ "api_tokens": [
+  {
+   "id": "00T1uhf29gZEhW9sr1d7",
+   "name": "Access Gateway",
+   "created": "2026-09-10T04:13:31.000Z",
+   "expiresAt": "2026-10-15T19:53:59.000Z",
+   "lastUpdated": "2026-09-15T19:53:59.000Z"
+  },
+  {
+   "id": "00T1unoceiyvEJoDl1d7",
+   "name": "CIBA APP",
+   "created": "2026-09-13T20:40:51.000Z",
+   "expiresAt": "2026-10-13T21:20:13.000Z",
+   "lastUpdated": "2026-09-13T21:20:13.000Z"
+  },
+  {
+   "id": "00T1up9hjvXOrgASn1d7",
+   "name": "PeopleSchoftToken",
+   "created": "2026-09-15T01:10:15.000Z",
+   "expiresAt": "2026-10-15T19:54:35.000Z",
+   "lastUpdated": "2026-09-15T19:54:35.000Z"
+  },
+  {
+   "id": "00T1sv84lhV80unN91d7",
+   "name": "resident_portal",
+   "created": "2026-08-17T21:08:14.000Z",
+   "expiresAt": "2026-10-15T15:26:26.000Z",
+   "lastUpdated": "2026-09-15T15:26:26.000Z"
+  },
+  {
+   "id": "00T1ur0tevx8MMu041d7",
+   "name": "RyanSetupKey",
+   "created": "2026-09-15T18:49:51.000Z",
+   "expiresAt": "2026-10-15T19:19:00.000Z",
+   "lastUpdated": "2026-09-15T19:19:00.000Z"
+  },
+  {
+   "id": "00T1p8yzyjdIi3xGd1d7",
+   "name": "Secret Token",
+   "created": "2026-06-02T19:22:51.000Z",
+   "expiresAt": "2026-09-20T19:25:39.000Z",
+   "lastUpdated": "2026-08-21T19:25:39.000Z"
+  },
+  {
+   "id": "00T1p56fo4xcHm7jd1d7",
+   "name": "SIS Service",
+   "created": "2026-05-30T17:29:09.000Z",
+   "expiresAt": "2026-10-14T22:06:02.000Z",
+   "lastUpdated": "2026-09-14T22:06:02.000Z"
+  },
+  {
+   "id": "00T1p2sw03ldk2FlH1d7",
+   "name": "Skylar Token",
+   "created": "2026-05-28T23:32:54.000Z",
+   "expiresAt": "2026-10-15T15:44:37.000Z",
+   "lastUpdated": "2026-09-15T15:44:37.000Z"
+  },
+  {
+   "id": "00T1q1ej32TgrZLeG1d7",
+   "name": "Super-Admin",
+   "created": "2026-06-20T20:16:22.000Z",
+   "expiresAt": "2026-10-15T15:44:09.000Z",
+   "lastUpdated": "2026-09-15T15:44:09.000Z"
+  }
+ ],
+ "agent_pools": [
+  {
+   "disruptedAgents": 0,
+   "inactiveAgents": 0,
+   "operationalAgents": 1,
+   "id": "0oa13lglyt8IxIWq31d8",
+   "name": "ad.skylarbarnes.com",
+   "type": "AD",
+   "operationalStatus": "OPERATIONAL",
+   "agents": [
+    {
+     "latestGAedVersion": true,
+     "id": "a5313kxrwj1X2TrjB1d8",
+     "type": "AD",
+     "operationalStatus": "OPERATIONAL",
+     "version": "3.23.0",
+     "lastConnection": 1789502075000,
+     "isLatestGAedVersion": true,
+     "poolId": "0oa13lglyt8IxIWq31d8",
+     "name": "EC2AMAZ-RB2RE91",
+     "isHidden": false
+    }
+   ],
+   "_links": {}
+  },
+  {
+   "disruptedAgents": 0,
+   "inactiveAgents": 0,
+   "operationalAgents": 2,
+   "id": "00oza64jujGVUEK8i1d7",
+   "name": "OPS Agents",
+   "type": "OPS",
+   "operationalStatus": "OPERATIONAL",
+   "agents": [
+    {
+     "latestGAedVersion": false,
+     "id": "cag13pear1pjahbXl1d8",
+     "type": "OPS",
+     "operationalStatus": "OPERATIONAL",
+     "version": "2.3.0",
+     "lastConnection": 1789502038000,
+     "isLatestGAedVersion": false,
+     "poolId": "00oza64jujGVUEK8i1d7",
+     "name": "ddbb64f2346b",
+     "isHidden": false
+    },
+    {
+     "latestGAedVersion": false,
+     "id": "cag13ql1m2wVh78yK1d8",
+     "type": "OPS",
+     "operationalStatus": "OPERATIONAL",
+     "version": "2.3.0",
+     "lastConnection": 1789502070000,
+     "isLatestGAedVersion": false,
+     "poolId": "00oza64jujGVUEK8i1d7",
+     "name": "231eec591c75",
+     "isHidden": false
+    }
+   ],
+   "_links": {}
+  }
+ ],
+ "app_schema_custom": {
+  "ext_account_status": {
+   "title": "ext_account_status",
+   "description": "account_status",
+   "type": "string",
+   "externalName": "ext_account_status",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_action": {
+   "title": "ext_action",
+   "description": "action",
+   "type": "string",
+   "externalName": "ext_action",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_action_reason": {
+   "title": "ext_action_reason",
+   "description": "action_reason",
+   "type": "string",
+   "externalName": "ext_action_reason",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_business_unit": {
+   "title": "ext_business_unit",
+   "description": "business_unit",
+   "type": "string",
+   "externalName": "ext_business_unit",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_city": {
+   "title": "ext_city",
+   "description": "city",
+   "type": "string",
+   "externalName": "ext_city",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_company": {
+   "title": "ext_company",
+   "description": "company",
+   "type": "string",
+   "externalName": "ext_company",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_country": {
+   "title": "ext_country",
+   "description": "country",
+   "type": "string",
+   "externalName": "ext_country",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_department": {
+   "title": "ext_department",
+   "description": "department",
+   "type": "string",
+   "externalName": "ext_department",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_deptid": {
+   "title": "ext_deptid",
+   "description": "deptid",
+   "type": "string",
+   "externalName": "ext_deptid",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_display_name": {
+   "title": "ext_display_name",
+   "description": "display_name",
+   "type": "string",
+   "externalName": "ext_display_name",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_effective_date": {
+   "title": "ext_effective_date",
+   "description": "effective_date",
+   "type": "string",
+   "externalName": "ext_effective_date",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_email": {
+   "title": "ext_email",
+   "description": "email",
+   "type": "string",
+   "externalName": "ext_email",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_empl_class": {
+   "title": "ext_empl_class",
+   "description": "empl_class",
+   "type": "string",
+   "externalName": "ext_empl_class",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_empl_status": {
+   "title": "ext_empl_status",
+   "description": "empl_status",
+   "type": "string",
+   "externalName": "ext_empl_status",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_empl_status_descr": {
+   "title": "ext_empl_status_descr",
+   "description": "empl_status_descr",
+   "type": "string",
+   "externalName": "ext_empl_status_descr",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_entitlements": {
+   "title": "ext_entitlements",
+   "description": "entitlements",
+   "type": "string",
+   "externalName": "ext_entitlements",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_first_name": {
+   "title": "ext_first_name",
+   "description": "first_name",
+   "type": "string",
+   "externalName": "ext_first_name",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_full_part_time": {
+   "title": "ext_full_part_time",
+   "description": "full_part_time",
+   "type": "string",
+   "externalName": "ext_full_part_time",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_grade": {
+   "title": "ext_grade",
+   "description": "grade",
+   "type": "string",
+   "externalName": "ext_grade",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_hire_dt": {
+   "title": "ext_hire_dt",
+   "description": "hire_dt",
+   "type": "string",
+   "externalName": "ext_hire_dt",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_hr_status": {
+   "title": "ext_hr_status",
+   "description": "hr_status",
+   "type": "string",
+   "externalName": "ext_hr_status",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_is_deleted": {
+   "title": "ext_is_deleted",
+   "description": "is_deleted",
+   "type": "string",
+   "externalName": "ext_is_deleted",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_job_family": {
+   "title": "ext_job_family",
+   "description": "job_family",
+   "type": "string",
+   "externalName": "ext_job_family",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_jobcode": {
+   "title": "ext_jobcode",
+   "description": "jobcode",
+   "type": "string",
+   "externalName": "ext_jobcode",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_last_date_worked": {
+   "title": "ext_last_date_worked",
+   "description": "last_date_worked",
+   "type": "string",
+   "externalName": "ext_last_date_worked",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_last_name": {
+   "title": "ext_last_name",
+   "description": "last_name",
+   "type": "string",
+   "externalName": "ext_last_name",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_last_update_dttm": {
+   "title": "ext_last_update_dttm",
+   "description": "last_update_dttm",
+   "type": "string",
+   "externalName": "ext_last_update_dttm",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_location": {
+   "title": "ext_location",
+   "description": "location",
+   "type": "string",
+   "externalName": "ext_location",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_manager_email": {
+   "title": "ext_manager_email",
+   "description": "manager_email",
+   "type": "string",
+   "externalName": "ext_manager_email",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_manager_id": {
+   "title": "ext_manager_id",
+   "description": "manager_id",
+   "type": "string",
+   "externalName": "ext_manager_id",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_manager_name": {
+   "title": "ext_manager_name",
+   "description": "manager_name",
+   "type": "string",
+   "externalName": "ext_manager_name",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_middle_name": {
+   "title": "ext_middle_name",
+   "description": "middle_name",
+   "type": "string",
+   "externalName": "ext_middle_name",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_mobile_phone": {
+   "title": "ext_mobile_phone",
+   "description": "mobile_phone",
+   "type": "string",
+   "externalName": "ext_mobile_phone",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_orig_hire_dt": {
+   "title": "ext_orig_hire_dt",
+   "description": "orig_hire_dt",
+   "type": "string",
+   "externalName": "ext_orig_hire_dt",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_pre_hire": {
+   "title": "ext_pre_hire",
+   "description": "pre_hire",
+   "type": "string",
+   "externalName": "ext_pre_hire",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_preferred_name": {
+   "title": "ext_preferred_name",
+   "description": "preferred_name",
+   "type": "string",
+   "externalName": "ext_preferred_name",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_reg_temp": {
+   "title": "ext_reg_temp",
+   "description": "reg_temp",
+   "type": "string",
+   "externalName": "ext_reg_temp",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_rehire_dt": {
+   "title": "ext_rehire_dt",
+   "description": "rehire_dt",
+   "type": "string",
+   "externalName": "ext_rehire_dt",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_state": {
+   "title": "ext_state",
+   "description": "state",
+   "type": "string",
+   "externalName": "ext_state",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_termination_dt": {
+   "title": "ext_termination_dt",
+   "description": "termination_dt",
+   "type": "string",
+   "externalName": "ext_termination_dt",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_title": {
+   "title": "ext_title",
+   "description": "title",
+   "type": "string",
+   "externalName": "ext_title",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_user_name": {
+   "title": "ext_user_name",
+   "description": "user_name",
+   "type": "string",
+   "externalName": "ext_user_name",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  },
+  "ext_work_phone": {
+   "title": "ext_work_phone",
+   "description": "work_phone",
+   "type": "string",
+   "externalName": "ext_work_phone",
+   "externalNamespace": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User",
+   "scope": "NONE",
+   "master": {
+    "type": "PROFILE_MASTER"
+   }
+  }
+ },
+ "mappings_index": [
+  {
+   "id": "prm13pcssr47qamqX1d8",
+   "source": {
+    "id": "0oa13pcssqvxK1EHK1d8",
+    "name": "jdbc_on_prem",
+    "type": "appuser",
+    "_links": {
+     "self": {
+      "href": "https://sledai.oktapreview.com/api/v1/apps/0oa13pcssqvxK1EHK1d8"
+     },
+     "schema": {
+      "href": "https://sledai.oktapreview.com/api/v1/meta/schemas/apps/0oa13pcssqvxK1EHK1d8/default"
+     }
+    }
+   },
+   "target": {
+    "id": "otyza64jwtAs4d7Tn1d7",
+    "name": "user",
+    "type": "user",
+    "_links": {
+     "self": {
+      "href": "https://sledai.oktapreview.com/api/v1/meta/types/user/otyza64jwtAs4d7Tn1d7"
+     },
+     "schema": {
+      "href": "https://sledai.oktapreview.com/api/v1/meta/schemas/user/oscza64jwtAs4d7Tn1d7"
+     }
+    }
+   },
+   "_links": {
+    "self": {
+     "href": "https://sledai.oktapreview.com/api/v1/mappings/prm13pcssr47qamqX1d8"
+    }
+   }
+  }
+ ],
+ "mappings_detail": {
+  "prm13pcssr47qamqX1d8": {
+   "id": "prm13pcssr47qamqX1d8",
+   "source": {
+    "id": "0oa13pcssqvxK1EHK1d8",
+    "name": "jdbc_on_prem",
+    "type": "appuser",
+    "_links": {
+     "self": {
+      "href": "https://sledai.oktapreview.com/api/v1/apps/0oa13pcssqvxK1EHK1d8"
+     },
+     "schema": {
+      "href": "https://sledai.oktapreview.com/api/v1/meta/schemas/apps/0oa13pcssqvxK1EHK1d8/default"
+     }
+    }
+   },
+   "target": {
+    "id": "otyza64jwtAs4d7Tn1d7",
+    "name": "user",
+    "type": "user",
+    "_links": {
+     "self": {
+      "href": "https://sledai.oktapreview.com/api/v1/meta/types/user/otyza64jwtAs4d7Tn1d7"
+     },
+     "schema": {
+      "href": "https://sledai.oktapreview.com/api/v1/meta/schemas/user/oscza64jwtAs4d7Tn1d7"
+     }
+    }
+   },
+   "properties": {
+    "email": {
+     "expression": "appuser.ext_email",
+     "pushStatus": "PUSH"
+    },
+    "lastName": {
+     "expression": "appuser.ext_last_name",
+     "pushStatus": "PUSH"
+    },
+    "manager": {
+     "expression": "appuser.ext_manager_name",
+     "pushStatus": "PUSH"
+    },
+    "city": {
+     "expression": "appuser.ext_city",
+     "pushStatus": "PUSH"
+    },
+    "nickName": {
+     "expression": "appuser.ext_preferred_name",
+     "pushStatus": "PUSH"
+    },
+    "displayName": {
+     "expression": "appuser.ext_display_name",
+     "pushStatus": "PUSH"
+    },
+    "costCenter": {
+     "expression": "appuser.ext_deptid",
+     "pushStatus": "PUSH"
+    },
+    "managerId": {
+     "expression": "appuser.ext_manager_id",
+     "pushStatus": "PUSH"
+    },
+    "login": {
+     "expression": "appuser.ext_user_name",
+     "pushStatus": "PUSH"
+    },
+    "title": {
+     "expression": "appuser.ext_title",
+     "pushStatus": "PUSH"
+    },
+    "employeeNumber": {
+     "expression": "appuser.userName",
+     "pushStatus": "PUSH"
+    },
+    "division": {
+     "expression": "appuser.ext_business_unit",
+     "pushStatus": "PUSH"
+    },
+    "firstName": {
+     "expression": "appuser.ext_first_name",
+     "pushStatus": "PUSH"
+    },
+    "primaryPhone": {
+     "expression": "appuser.ext_work_phone",
+     "pushStatus": "PUSH"
+    },
+    "mobilePhone": {
+     "expression": "appuser.ext_mobile_phone",
+     "pushStatus": "PUSH"
+    },
+    "countryCode": {
+     "expression": "appuser.ext_country",
+     "pushStatus": "PUSH"
+    },
+    "organization": {
+     "expression": "appuser.ext_company",
+     "pushStatus": "PUSH"
+    },
+    "middleName": {
+     "expression": "appuser.ext_middle_name",
+     "pushStatus": "PUSH"
+    },
+    "state": {
+     "expression": "appuser.ext_state",
+     "pushStatus": "PUSH"
+    },
+    "department": {
+     "expression": "appuser.ext_department",
+     "pushStatus": "PUSH"
+    }
+   },
+   "_links": {
+    "self": {
+     "href": "https://sledai.oktapreview.com/api/v1/mappings/prm13pcssr47qamqX1d8"
+    }
+   }
+  }
+ }
+}
