@@ -110,6 +110,33 @@ HR_DB_SERVICES = """
     restart: unless-stopped
 """
 
+HR_DB_MYSQL_SERVICES = """
+  # HR master mirror (MySQL flavour) for the Okta On-prem Connector for Generic Databases. Port 3306 per Okta's port table.
+  hr-db:
+    image: mysql:8
+    container_name: hr-db
+    environment:
+      MYSQL_DATABASE: hrmaster
+      MYSQL_USER: hr
+      MYSQL_PASSWORD: hr
+      MYSQL_ROOT_PASSWORD: hr
+    ports:
+      - "3306:3306"
+    volumes:
+      - hr-db-data:/var/lib/mysql
+    restart: unless-stopped
+  hr-mirror:
+    image: mysql:8
+    container_name: hr-mirror
+    depends_on:
+      - hr-db
+      - peopleschoft
+    volumes:
+      - peopleschoft-data:/export:ro
+    entrypoint: ["bash", "-c", "until mysqladmin ping -h hr-db -uroot -phr --silent 2>/dev/null; do sleep 2; done; mysql -h hr-db -uroot -phr -e \\"GRANT ALL PRIVILEGES ON hrmaster.* TO 'hr'@'%'; FLUSH PRIVILEGES;\\" 2>/dev/null; while true; do if [ -f /export/export/hr_master.mysql.sql ]; then mysql -h hr-db -uhr -phr hrmaster < /export/export/hr_master.mysql.sql 2>/dev/null && echo \\"$(date -u +%FT%TZ) mirrored hr_master.mysql.sql\\"; fi; sleep {interval}; done"]
+    restart: unless-stopped
+"""
+
 MOCK_SERVICE = """
   # Fake Okta org so the users / webhook / identity-source modes work without a tenant.
   # Point PeopleSchoft at it with: OKTA_MODE=users OKTA_ORG_URL=http://mock-okta:9090 OKTA_API_TOKEN=mock
@@ -134,13 +161,14 @@ __pycache__/
 """
 
 
-def render(port, python, with_mock, live=True, with_hr_db=False, interval=30):
+def render(port, python, with_mock, live=True, with_hr_db=False, interval=30, engine="postgres"):
+    hrdb_tpl = HR_DB_MYSQL_SERVICES if engine == "mysql" else HR_DB_SERVICES
     return {
         "Dockerfile": DOCKERFILE.format(port=port, python=python),
         "docker-compose.yml": COMPOSE.format(port=port, mock=MOCK_SERVICE if with_mock else "", live=LIVE_MOUNTS if live else "",
-                                             hrdb=HR_DB_SERVICES.format(interval=interval) if with_hr_db else "",
+                                             hrdb=hrdb_tpl.format(interval=interval) if with_hr_db else "",
                                              hrdb_volume="  hr-db-data:\n" if with_hr_db else "",
-                                             sql_dialect="postgres" if with_hr_db else "", interval=interval),
+                                             sql_dialect=engine if with_hr_db else "", interval=interval),
         ".dockerignore": DOCKERIGNORE,
     }
 
@@ -151,14 +179,15 @@ def main():
     ap.add_argument("--python", default="3.12", help="python base image tag (default 3.12)")
     ap.add_argument("--no-mock", action="store_true", help="omit the mock-okta service from the compose file")
     ap.add_argument("--no-live", action="store_true", help="do not mount the source tree; the image is self-contained and needs a rebuild per change")
-    ap.add_argument("--with-hr-db", action="store_true", help="add a Postgres HR-master mirror (hr-db on :5432) for the Okta On-prem Connector for Generic Databases")
+    ap.add_argument("--with-hr-db", action="store_true", help="add an HR-master mirror database (hr-db) for the Okta On-prem Connector for Generic Databases")
+    ap.add_argument("--hr-db-engine", choices=["postgres", "mysql"], default="postgres", help="mirror engine: postgres (port 5432) or mysql (port 3306), matching Okta's port table")
     ap.add_argument("--mirror-interval", type=int, default=30, help="seconds between HR mirror refreshes (default 30)")
     ap.add_argument("--out", default=str(ROOT), help="directory to write into (default: repo root)")
     ap.add_argument("--print", action="store_true", help="print the files instead of writing them")
     ap.add_argument("--force", action="store_true", help="overwrite existing files")
     a = ap.parse_args()
 
-    files = render(a.port, a.python, not a.no_mock, not a.no_live, a.with_hr_db, a.mirror_interval)
+    files = render(a.port, a.python, not a.no_mock, not a.no_live, a.with_hr_db, a.mirror_interval, a.hr_db_engine)
     out = Path(a.out)
     if a.print:
         for name, content in files.items():
@@ -184,8 +213,9 @@ After a code change: nothing to do{'' if a.no_live else ' - the source is mounte
 Rebuild only if the Dockerfile itself changes:  docker compose up -d --build
 {'' if not a.with_hr_db else f'''
 HR master mirror for the Okta On-prem Connector (Generic Databases):
-  Postgres at localhost:5432, database hrmaster, user hr, password hr (tables hr_worker, hr_entitlement, hr_worker_entitlement, view hr_worker_v)
-  docker compose logs -f hr-mirror              # prints "mirrored hr_master.postgres.sql" every {a.mirror_interval}s
+  {'MySQL at localhost:3306' if a.hr_db_engine == 'mysql' else 'Postgres at localhost:5432'}, database hrmaster, user hr, password hr (tables hr_worker, hr_entitlement, hr_worker_entitlement, view hr_worker_v)
+  docker compose logs -f hr-mirror              # prints "mirrored hr_master.{a.hr_db_engine}.sql" every {a.mirror_interval}s
+  Agent host preflight (RHEL 8/9/10, JDK 21, OpenSSL 3, JDBC, ports): python3 scripts/opc_preflight.py --db {a.hr_db_engine} --db-host <this machine> --jdbc <driver.jar> --okta-org https://<org>.okta.com
   Connector SQL values: open http://localhost:{a.port}/hr-master
 '''}
 Okta against the mock inside compose:

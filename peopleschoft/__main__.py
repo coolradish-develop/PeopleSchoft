@@ -21,7 +21,7 @@ def main(argv=None):
     sub.add_parser("export", help="enqueue a full snapshot of every worker for Okta")
     sub.add_parser("status", help="print counts and Okta configuration")
     x = sub.add_parser("export-sql", help="print HR master SQL for the Okta Generic Databases connector")
-    x.add_argument("--dialect", default="postgres", choices=["postgres", "mysql", "mssql", "sqlite"])
+    x.add_argument("--dialect", default="postgres", choices=["postgres", "mysql", "mssql", "oracle", "db2", "sqlite"])
     x.add_argument("--since", default=None, help="only workers changed after this ISO timestamp")
     x.add_argument("--no-ddl", action="store_true")
     args = p.parse_args(argv)

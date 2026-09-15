@@ -172,6 +172,20 @@ PS_SQL_EXPORT_DIALECT=postgres    # server writes data/export/hr_master.postgres
 python3 scripts/generate_docker.py --with-hr-db --force   # compose adds Postgres (hr-db :5432) + a mirror job
 ```
 
+Dialects cover all five databases Okta supports: `postgres`, `mysql`, `mssql`, `oracle`, `db2`.
+
+Okta's *System requirements for On-premises Connector - Generic Databases* (Early Access) for the agent host:
+a dedicated RHEL 8/9/10 server with 4+ cores, 4 GB RAM and 10 GB storage running both agents, Okta Provisioning
+Agent 3.0.6+, On-prem SCIM Server agent 1.5.0+ (1.7.0+ for Db2), JDK 21, the JDBC driver for your database,
+OpenSSL 3+, a database user with administrator privileges, an Okta admin able to create apps and configure agents,
+Okta IP ranges allowlisted, outbound 443 (OPA to Okta), 1443 between OPA and OPS if on separate servers, and the
+database port (PostgreSQL 5432, MySQL 3306, SQL Server 1433, Oracle 1521, Db2 50000). `scripts/opc_preflight.py`
+checks all of that on the agent host (plain python3, exit code 1 on any FAIL):
+
+```
+python3 opc_preflight.py --db postgres --db-host hr-db.example.com --jdbc /opt/okta/jdbc/postgresql.jar --okta-org https://your-org.okta.com
+```
+
 Tables: `hr_worker` (one row per person, `account_status` ACTIVE/INACTIVE, `is_deleted`, `last_update_dttm`),
 `hr_entitlement` (departments, job codes, PeopleSoft roles), `hr_worker_entitlement` (assignments, soft-deleted on
 transfer), and view `hr_worker_v` (users plus a comma-separated `entitlements` column). Connector field values

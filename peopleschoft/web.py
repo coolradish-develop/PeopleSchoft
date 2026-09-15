@@ -814,6 +814,15 @@ python3 -m peopleschoft export-sql --dialect mysql &gt; hr_master.sql
 python3 scripts/generate_docker.py --with-hr-db --force   # compose: Postgres + a mirror job that loads the export every {cfg['sqlExportInterval']}s</pre>
 <b>Connector settings (Provisioning tab &gt; Schema discovery &amp; Import)</b>
 <table class="grid"><tr><th>Field</th><th>Value</th></tr>{crows}</table>
-<p class="muted">The mirror keeps the connector's requirements: soft deletes (<code>is_deleted</code>), an auto-updating <code>last_update_dttm</code> on every table (trigger on PostgreSQL/MySQL), and <code>account_status</code> for the Account Status Attribute. Needs Okta Identity Governance and the EA features listed in Okta's guide.</p></div></div></div>
+<p class="muted">The mirror keeps the connector's requirements: soft deletes (<code>is_deleted</code>), an auto-updating <code>last_update_dttm</code> on every table (trigger on PostgreSQL/MySQL), and <code>account_status</code> for the Account Status Attribute. Dialects: postgres, mysql, mssql, oracle, db2. Needs Okta Identity Governance and the EA features listed in Okta's guide.</p>
+<b>Agent host requirements (Okta: System requirements for On-premises Connector - Generic Databases)</b>
+<table class="grid"><tr><th>Item</th><th>Requirement</th></tr>
+<tr><td>Host</td><td>Dedicated Linux server, Red Hat Enterprise Linux 8, 9 or 10, running both agents</td></tr>
+<tr><td>Hardware</td><td>4+ cores, 4 GB RAM, 10 GB storage</td></tr>
+<tr><td>Agents</td><td>Okta Provisioning Agent (OPA) 3.0.6+, Okta On-prem SCIM Server (OPS) agent 1.5.0+ (Db2: 1.7.0+)</td></tr>
+<tr><td>Software</td><td>JDK 21, the JDBC driver for your database, OpenSSL 3+</td></tr>
+<tr><td>Access</td><td>Okta admin who can create apps and configure agents; database user with administrator privileges; Okta IP ranges allowlisted</td></tr>
+<tr><td>Ports</td><td>443 out (OPA to Okta), 1443 OPA to OPS if on separate servers, database: PostgreSQL 5432, MySQL 3306, SQL Server 1433, Oracle 1521, Db2 50000</td></tr>
+<tr><td>Preflight</td><td><code>python3 scripts/opc_preflight.py --db postgres --db-host &lt;db&gt; --jdbc &lt;driver.jar&gt; --okta-org https://&lt;org&gt;.okta.com</code> on the agent host</td></tr></table></div></div></div>
 <div class="grp"><div class="gh">Sample SCIM 1.1 user from the feed</div><div class="gb"><pre>{e(json.dumps(sample, indent=1))}</pre></div></div></div>"""
     return layout(req, "HR as a Source", body, 'Integration Broker &gt; <b>HR as a Source</b>')

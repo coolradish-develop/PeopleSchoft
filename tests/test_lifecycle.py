@@ -463,9 +463,24 @@ class HrMasterTests(unittest.TestCase):
         mirror.executescript(sqlexport.render(self.conn, "sqlite", include_ddl=False))
         self.assertEqual(mirror.execute("SELECT department FROM hr_worker WHERE emplid='100011'").fetchone()[0], "Platform Engineering")
         self.assertEqual(mirror.execute("SELECT is_deleted FROM hr_worker_entitlement WHERE emplid='100011' AND entitlement_id='DEPT:13000'").fetchone()[0], 1)
-        for d in ("postgres", "mysql", "mssql"):
+        # entitlement-only change (role pushed by Okta over SCIM) must move the user row timestamp
+        import time
+        time.sleep(1.1)
+        ts = db.now_iso()
+        time.sleep(1.1)
+        from peopleschoft import scim
+        u = scim.create_user(self.conn, {"userName": "hannah.schmidt@gbi.example.com", "roles": [{"value": "HR Administrator"}],
+                                         "emails": [{"value": "hannah.schmidt@gbi.example.com", "primary": True}]}, "http://t")
+        delta = sqlexport.render(self.conn, "sqlite", since=ts, include_ddl=False)
+        self.assertIn("'100011'", delta)
+        self.assertIn("ROLE:HR Administrator", delta)
+        self.assertEqual(delta.count("INSERT INTO hr_worker ("), 1)
+        for d in ("postgres", "mysql", "mssql", "oracle", "db2"):
             text = sqlexport.render(self.conn, d)
             self.assertNotIn("None", text)
             self.assertIn("hr_worker_v", text)
+        self.assertIn("MERGE INTO hr_worker t USING (SELECT", sqlexport.render(self.conn, "oracle"))
+        self.assertIn("FROM SYSIBM.SYSDUMMY1", sqlexport.render(self.conn, "db2"))
+        self.assertIn("VARCHAR2", sqlexport.render(self.conn, "oracle"))
         with self.assertRaises(ValueError):
-            sqlexport.render(self.conn, "oracle")
+            sqlexport.render(self.conn, "access")

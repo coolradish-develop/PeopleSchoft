@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 
 from . import db, hr, hrscim
 
-DIALECTS = ("postgres", "mysql", "mssql", "sqlite")
+DIALECTS = ("postgres", "mysql", "mssql", "oracle", "db2", "sqlite")   # the five databases Okta supports, plus sqlite for tests
+MERGE_DUMMY = {"mssql": "", "oracle": " FROM dual", "db2": " FROM SYSIBM.SYSDUMMY1"}
 
 WORKER_COLS = ["emplid", "user_name", "email", "first_name", "last_name", "middle_name", "preferred_name", "display_name", "title", "jobcode",
                "job_family", "grade", "deptid", "department", "location", "city", "state", "country", "company", "business_unit",
@@ -26,8 +27,9 @@ WE_COLS = ["emplid", "entitlement_id", "is_deleted", "last_update_dttm"]
 
 
 def _types(dialect):
-    ts = {"postgres": "TIMESTAMP", "mysql": "DATETIME", "mssql": "DATETIME2", "sqlite": "TEXT"}[dialect]
-    return {"str": "VARCHAR(255)", "code": "VARCHAR(50)", "int": "INTEGER" if dialect != "mssql" else "INT", "date": "VARCHAR(10)", "ts": ts}
+    ts = {"postgres": "TIMESTAMP", "mysql": "DATETIME", "mssql": "DATETIME2", "oracle": "TIMESTAMP", "db2": "TIMESTAMP", "sqlite": "TEXT"}[dialect]
+    vc = "VARCHAR2" if dialect == "oracle" else "VARCHAR"
+    return {"str": f"{vc}(255)", "code": f"{vc}(50)", "int": {"mssql": "INT", "oracle": "NUMBER(1)"}.get(dialect, "INTEGER"), "date": f"{vc}(10)", "ts": ts}
 
 
 def ddl(dialect):
@@ -52,6 +54,12 @@ def ddl(dialect):
     elif dialect == "mssql":
         out += ["IF OBJECT_ID('hr_worker_v', 'V') IS NOT NULL DROP VIEW hr_worker_v;",
                 "CREATE VIEW hr_worker_v AS SELECT w.*, (SELECT STRING_AGG(we.entitlement_id, ',') FROM hr_worker_entitlement we WHERE we.emplid = w.emplid AND we.is_deleted = 0) AS entitlements FROM hr_worker w;"]
+    elif dialect == "oracle":
+        out = ["-- Oracle: CREATE TABLE has no IF NOT EXISTS; ignore ORA-00955 (name already used) on re-runs"] + out + [
+            "CREATE OR REPLACE VIEW hr_worker_v AS SELECT w.*, (SELECT LISTAGG(we.entitlement_id, ',') WITHIN GROUP (ORDER BY we.entitlement_id) FROM hr_worker_entitlement we WHERE we.emplid = w.emplid AND we.is_deleted = 0) AS entitlements FROM hr_worker w;"]
+    elif dialect == "db2":
+        out = ["-- Db2 LUW: CREATE TABLE has no IF NOT EXISTS; ignore SQL0601N (already exists) on re-runs. Requires OPS agent 1.7.0 or later"] + out + [
+            "CREATE OR REPLACE VIEW hr_worker_v AS SELECT w.*, (SELECT LISTAGG(we.entitlement_id, ',') WITHIN GROUP (ORDER BY we.entitlement_id) FROM hr_worker_entitlement we WHERE we.emplid = w.emplid AND we.is_deleted = 0) AS entitlements FROM hr_worker w;"]
     elif dialect == "sqlite":
         out += ["CREATE VIEW IF NOT EXISTS hr_worker_v AS SELECT w.*, (SELECT group_concat(we.entitlement_id, ',') FROM hr_worker_entitlement we WHERE we.emplid = w.emplid AND we.is_deleted = 0) AS entitlements FROM hr_worker w;"]
     return out
@@ -83,13 +91,25 @@ def upsert(dialect, table, cols, row, key):
         return f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({vals}) ON CONFLICT ({', '.join(key)}) DO UPDATE SET {sets};"
     if dialect == "mysql":
         return f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({vals}) ON DUPLICATE KEY UPDATE {sets};"
+    # MERGE for SQL Server, Oracle and Db2 (Oracle/Db2 need a dummy source table and no AS before the alias)
     on = " AND ".join(f"t.{k} = s.{k}" for k in key)
     src = ", ".join(f"{_q(row[c])} AS {c}" for c in cols)
-    return (f"MERGE {table} AS t USING (SELECT {src}) AS s ON {on} WHEN MATCHED THEN UPDATE SET {sets} "
+    into, as_ = ("INTO ", "") if dialect in ("oracle", "db2") else ("", "AS ")
+    return (f"MERGE {into}{table} {as_}t USING (SELECT {src}{MERGE_DUMMY[dialect]}) {as_}s ON ({on}) WHEN MATCHED THEN UPDATE SET {sets} "
             f"WHEN NOT MATCHED THEN INSERT ({', '.join(cols)}) VALUES ({', '.join('s.' + c for c in cols)});")
 
 
-def worker_row(w):
+def worker_ts(conn, w):
+    """User-row timestamp. Okta's guide: the User table's timestamp must reflect entitlement-only changes, otherwise
+    Incremental Import cannot detect them. Roles (PSROLEUSER) change through the user profile, so include its update time."""
+    ts = hrscim.last_modified(w)
+    prof = db.row(conn, "SELECT MAX(LASTUPDDTTM) AS T FROM PSOPRDEFN WHERE EMPLID=?", (w["emplid"],))
+    if prof and prof["T"] and prof["T"] > ts:
+        ts = prof["T"]
+    return ts
+
+
+def worker_row(w, ts=None):
     j = w.get("job") or {}
     # Same rule as the SCIM feed: pre-hires are exported only inside the pre-hire window, and count as active
     # so Okta creates them ahead of their start date instead of deactivating them.
@@ -105,7 +125,7 @@ def worker_row(w):
             "empl_class": j.get("emplClass"), "reg_temp": j.get("regTemp"), "full_part_time": j.get("fullPartTime"), "action": j.get("action"),
             "action_reason": j.get("actionReason"), "effective_date": j.get("effdt"), "hire_dt": w.get("hireDate"), "orig_hire_dt": w.get("originalHireDate"),
             "rehire_dt": w.get("rehireDate"), "termination_dt": w.get("terminationDate"), "last_date_worked": w.get("lastDateWorked"),
-            "pre_hire": 1 if w.get("preHire") else 0, "is_deleted": 0, "last_update_dttm": _ts(hrscim.last_modified(w))}
+            "pre_hire": 1 if w.get("preHire") else 0, "is_deleted": 0, "last_update_dttm": _ts(ts or hrscim.last_modified(w))}
 
 
 def entitlements(conn):
@@ -145,9 +165,9 @@ def render(conn, dialect="postgres", since=None, include_ddl=True):
     for ent in entitlements(conn):
         lines.append(upsert(dialect, "hr_entitlement", ENT_COLS, {**ent, "is_deleted": 0, "last_update_dttm": ent_ts}, ["entitlement_id"]))
     workers, _ = hr.list_workers(conn, limit=100000)
-    workers = [w for w in workers if hrscim.visible(w) and (not since or hrscim.last_modified(w) > since)]
+    workers = [w for w in workers if hrscim.visible(w) and (not since or worker_ts(conn, w) > since)]
     for w in workers:
-        row = worker_row(w)
+        row = worker_row(w, worker_ts(conn, w))
         lines.append(upsert(dialect, "hr_worker", WORKER_COLS, row, ["emplid"]))
         ids = worker_entitlements(conn, w)
         for eid in ids:
@@ -160,15 +180,21 @@ def render(conn, dialect="postgres", since=None, include_ddl=True):
 
 def connector_settings():
     """Values to paste into the Okta On-prem Connector for Generic Databases (Provisioning tab)."""
+    # Field order follows Okta's guide: Provisioning tab > Integration > Schema discovery & Import, then Database Operations.
     return {
-        "Get Users (SQL Statement)": "SELECT * FROM hr_worker_v WHERE is_deleted = 0",
-        "User ID column": "emplid",
-        "Account Status Attribute": "account_status   (active value: ACTIVE)",
-        "Incremental Import (SQL Statement)": "SELECT * FROM hr_worker_v WHERE is_deleted = 0 AND last_update_dttm > ?",
-        "Database Field / Timestamp Column": "last_update_dttm",
-        "Get All Entitlements (SQL Statement)": "SELECT entitlement_id, entitlement_name, entitlement_type FROM hr_entitlement WHERE is_deleted = 0",
-        "Entitlement ID column / display column": "entitlement_id / entitlement_name",
-        "User entitlements": "column 'entitlements' on hr_worker_v (comma-separated entitlement_id values), or SELECT entitlement_id FROM hr_worker_entitlement WHERE emplid = ? AND is_deleted = 0",
+        "Get Users": "Enabled - SQL Statement",
+        "Get Users query": "SELECT * FROM hr_worker_v WHERE is_deleted = 0",
+        "Get Users - user ID column": "emplid",
+        "Get All Entitlements": "Enabled - SQL Statement",
+        "Get All Entitlements query": "SELECT entitlement_id, entitlement_name, entitlement_type FROM hr_entitlement WHERE is_deleted = 0",
+        "Get All Entitlements - entitlement ID column / display column": "entitlement_id / entitlement_name",
+        "Enable Single Entitlements per User": "leave OFF (workers hold a department, a job code and roles at once; this setting is permanent once entitlements are discovered)",
+        "Account Status Attribute (optional but recommended)": "column account_status, active value ACTIVE   (without it Okta never deactivates imported users)",
+        "Incremental Import": "Enabled - SQL Statement",
+        "Incremental Import query": "SELECT * FROM hr_worker_v WHERE is_deleted = 0 AND last_update_dttm > ?   (? = last import time)",
+        "Incremental Import - Database Field / Timestamp Column": "last_update_dttm / last_update_dttm",
+        "User entitlements": "hr_worker_v.entitlements (comma-separated entitlement_id values per user); detail rows in hr_worker_entitlement",
+        "Database requirements met by the mirror": "soft deletes (is_deleted), auto-updating last_update_dttm on every table, user row timestamp moves on entitlement-only changes",
         "Attribute mapping suggestions": "user_name->userName/login, email->email, first_name->firstName, last_name->lastName, display_name->displayName, title->title, department->department, emplid->employeeNumber, manager_id->managerId, manager_email->manager, deptid->costCenter, company->organization, business_unit->division, mobile_phone->mobilePhone, city/state/country",
-        "To App (Create/Update/Deactivate)": "leave disabled: PeopleSoft is the HR master; Okta only imports",
+        "To App (Create User / Update User / Deactivate User)": "leave disabled: PeopleSoft is the HR master and Okta only imports. If you enable them, map the parameters of your INSERT/UPDATE statements to Okta user attributes",
     }
