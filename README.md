@@ -48,6 +48,11 @@ then classic transaction pages underneath.
 * The **Okta Provisioning** tab on Job Data is the one addition PeopleSoft does not have: it shows the Okta profile
   mapping, desired Okta status, and the outbox events for that person.
 
+## Demoing it to a customer
+
+`docs/DEMO-RUNBOOK.md` is a 25-minute script: prep checklist, joiner, mover, leaver, rehire, what to click in
+PeopleSchoft and what to show in Okta at each step, a troubleshooting table and a reset procedure.
+
 ## The lifecycle journey
 
 Every HR action writes a new `PS_JOB` row and drops an event in the `PS_OKTA_EVENTS` outbox.
