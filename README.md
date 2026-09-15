@@ -216,14 +216,15 @@ python3 opc_preflight.py --db postgres --db-host hr-db.example.com --jdbc /opt/o
    password, then Connect agents.
 4. Paste the Schema discovery & Import and Database Operations values from the HR as a Source page (Get Users,
    user ID column `emplid`, Get All Entitlements, Account Status Attribute `account_status` = `ACTIVE`,
-   Incremental Import with `last_update_dttm`), map attributes, and run an import. Run the Lifecycle Journey in
+   Incremental Import `... AND last_update_dttm > CAST(? AS TIMESTAMP)` with `last_update_dttm` as the parameter field and
+   timestamp column; the agent binds the placeholder as text, so the cast is required), map attributes, and run an import. Run the Lifecycle Journey in
    PeopleSchoft, wait one mirror cycle, import again, and the joiner, mover and leaver show up in Okta.
 
 Tables: `hr_worker` (one row per person, `account_status` ACTIVE/INACTIVE, `is_deleted`, `last_update_dttm`),
 `hr_entitlement` (departments, job codes, PeopleSoft roles), `hr_worker_entitlement` (assignments, soft-deleted on
 transfer), and view `hr_worker_v` (users plus a comma-separated `entitlements` column). Connector field values
 (Get Users, User ID column `emplid`, Account Status Attribute `account_status` = `ACTIVE`, Incremental Import
-`... WHERE last_update_dttm > ?`, Get All Entitlements) are listed on `/hr-master`. Needs Okta Identity Governance
+`... WHERE last_update_dttm > CAST(? AS TIMESTAMP)`, Get All Entitlements) are listed on `/hr-master`. Needs Okta Identity Governance
 and the EA features named in Okta's guide.
 
 ### Okta Access Gateway (header-based sign-on to the UI)

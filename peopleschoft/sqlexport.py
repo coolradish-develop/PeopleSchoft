@@ -194,7 +194,7 @@ def connector_settings():
         "Enable Single Entitlements per User": "leave OFF (workers hold a department, a job code and roles at once; this setting is permanent once entitlements are discovered)",
         "Account Status Attribute (optional but recommended)": "column account_status, active value ACTIVE   (without it Okta never deactivates imported users)",
         "Incremental Import": "Enabled - SQL Statement",
-        "Incremental Import query": "SELECT * FROM hr_worker_v WHERE is_deleted = 0 AND last_update_dttm > ?   (? = last import time)",
+        "Incremental Import query": "SELECT * FROM hr_worker_v WHERE is_deleted = 0 AND last_update_dttm > CAST(? AS TIMESTAMP)   (? = last import time, bound as text by the agent; MySQL: CAST(? AS DATETIME), SQL Server: CAST(? AS DATETIME2))",
         "Incremental Import - Database Field / Timestamp Column": "last_update_dttm / last_update_dttm",
         "User entitlements": "hr_worker_v.entitlements (comma-separated entitlement_id values per user); detail rows in hr_worker_entitlement",
         "Database requirements met by the mirror": "soft deletes (is_deleted), auto-updating last_update_dttm on every table, user row timestamp moves on entitlement-only changes",
