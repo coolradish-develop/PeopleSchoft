@@ -157,8 +157,10 @@ getent passwd okscimserver >/dev/null || useradd -r -g okscimserver -d $APP -s /
 if ! ls $APP/lib/OktaOnPremScimServer-*.jar >/dev/null 2>&1; then
   case "${{OKTA_EULA_ACCEPT:-}}" in y|Y|yes|YES|true|1) ;; *)
     echo "!! Set OKTA_EULA_ACCEPT=yes in .env to accept Okta's On-prem SCIM Server EULA (https://www.okta.com/legal/) before installing."; sleep infinity;; esac
-  echo "== installing $RPM in agent mode"
-  INSTALL_MODE=agent OKTA_EULA_ACCEPT=yes rpm -ivh "$RPM"
+  echo "== installing $RPM in agent mode (arch: $(uname -m))"
+  # The rpm is stamped x86_64 but ships only shell scripts, a Java jar and systemd units, so it runs on
+  # arm64 hosts (Apple Silicon) with the arm64 JDK: --ignorearch skips the architecture check.
+  INSTALL_MODE=agent OKTA_EULA_ACCEPT=yes rpm -ivh --ignorearch "$RPM"
 fi
 JAR=$(ls $APP/lib/OktaOnPremScimServer-*.jar | head -1)
 mkdir -p $APP/userlib $APP/userplugin $LOGS
