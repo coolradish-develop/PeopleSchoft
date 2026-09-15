@@ -20,6 +20,10 @@ def main(argv=None):
     sub.add_parser("okta-sync", help="flush the Okta outbox once")
     sub.add_parser("export", help="enqueue a full snapshot of every worker for Okta")
     sub.add_parser("status", help="print counts and Okta configuration")
+    x = sub.add_parser("export-sql", help="print HR master SQL for the Okta Generic Databases connector")
+    x.add_argument("--dialect", default="postgres", choices=["postgres", "mysql", "mssql", "sqlite"])
+    x.add_argument("--since", default=None, help="only workers changed after this ISO timestamp")
+    x.add_argument("--no-ddl", action="store_true")
     args = p.parse_args(argv)
 
     from . import db, hr, okta
@@ -61,6 +65,9 @@ def main(argv=None):
     elif cmd == "export":
         n = okta.full_export(conn)
         print(f"Queued {n} snapshot events")
+    elif cmd == "export-sql":
+        from . import sqlexport
+        sys.stdout.write(sqlexport.render(conn, args.dialect, args.since, not args.no_ddl))
     elif cmd == "status":
         counts = {k: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for k, t in
                   (("workers", "PS_PERSONAL_DATA"), ("jobRows", "PS_JOB"), ("userProfiles", "PSOPRDEFN"), ("events", "PS_OKTA_EVENTS"))}

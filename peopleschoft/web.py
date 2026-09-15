@@ -97,7 +97,7 @@ SVG_BELL = '<svg viewBox="0 0 24 24"><path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 
 LOOKUP = '<span class="lk" title="Look up">' + SVG_SEARCH + '</span>'
 
 NAV = [("/", "Homepage", "HM"), ("/employees", "Job Data", "JD"), ("/hire", "Add Employment Instance", "AE"),
-       ("/journey", "Lifecycle Journey", "LJ"), ("/okta", "Okta Integration", "OK"), ("/users", "User Profiles", "UP"),
+       ("/journey", "Lifecycle Journey", "LJ"), ("/okta", "Okta Integration", "OK"), ("/hr-master", "HR as a Source (OPP / OPC)", "HR"), ("/users", "User Profiles", "UP"),
        ("/setup", "Foundation Tables", "FT"), ("/api-docs", "Integration Broker / API", "IB"), ("/signon", "Sign-on Status (OAG)", "SO")]
 
 
@@ -195,6 +195,7 @@ def home(req, conn):
 <a class="tile" href="/hire"><div class="t">Add Employment Instance</div><div class="sub">Hire a person</div><div class="rows"><b>{c['PRE']}</b> pre-hires (future dated)<br><b>{len(workers)}</b> people total<br><b>10</b> departments</div></a>
 <a class="tile" href="/journey"><div class="t">Lifecycle Journey</div><div class="sub">Joiner &middot; Mover &middot; Leaver</div><div class="rows">HIR &rarr; PRO &rarr; XFR &rarr; DTA<br>LOA &rarr; RFL &rarr; TER &rarr; REH<br><b>1</b> click</div></a>
 <a class="tile" href="/okta"><div class="t">Okta Integration</div><div class="sub">Integration Broker outbox &middot; mode {e(config.okta_mode)}</div><div class="rows"><b>{ev.get('PENDING', 0)}</b> pending<br><b>{ev.get('SCHEDULED', 0)}</b> scheduled<br><b>{ev.get('SENT', 0) + ev.get('DRYRUN', 0)}</b> sent / dry-run<br><b>{ev.get('FAILED', 0)}</b> failed</div></a>
+<a class="tile" href="/hr-master"><div class="t">HR as a Source</div><div class="sub">Okta imports from PeopleSoft</div><div class="rows">SCIM 1.1 / 2.0 feed for the<br>Okta Provisioning Agent<br>SQL mirror for the On-prem<br>Connector (Generic Databases)</div></a>
 <a class="tile" href="/users"><div class="t">User Profiles</div><div class="sub">PeopleTools &gt; Security</div><div class="big">{users}</div><div class="sub">provisioned by Okta over SCIM</div></a>
 <a class="tile" href="/setup"><div class="t">Foundation Tables</div><div class="sub">Set Up HCM</div><div class="rows">Departments &middot; Job Codes<br>Locations &middot; Company<br>Reset demo data</div></a>
 <a class="tile" href="/api-docs"><div class="t">Integration Broker</div><div class="sub">REST / IB / SCIM reference</div><div class="rows">/api/v1/workers<br>/PSIGW/RESTListeningConnector<br>/scim/v2</div></a>
@@ -767,3 +768,52 @@ def signon_page(req, conn):
 @route("GET", r"/signout")
 def signout(req, conn):
     return redirect(config.sso_logout_url)
+
+
+# ---------------- HR as a Source (Okta On-Premises Provisioning / On-prem Connector)
+@route("GET", r"/hr-master")
+def hr_master_page(req, conn):
+    from . import hrscim, sqlexport
+    from .api import latest_export
+    base = req.base_url
+    cfg = config.hr_master_summary()
+    workers, total = hr.list_workers(conn, limit=100000)
+    vis = [w for w in workers if hrscim.visible(w)]
+    exp = latest_export()
+    caps = ", ".join(hrscim.capabilities())
+    crows = "".join(f"<tr><td>{e(k)}</td><td><code>{e(v)}</code></td></tr>" for k, v in sqlexport.connector_settings().items())
+    tok = config.hr_scim_token
+    sample = hrscim.to_user(vis[0], base, 1) if vis else {}
+    body = f"""<div class="pgtitle">HR as a Source - Okta imports from PeopleSoft</div><div class="pgbody">
+<p>Two ways for Okta to treat this system as the <b>HR master (profile source)</b>. Both are read-only views of the same PeopleSoft data:
+joiners appear when hired (pre-hires {config.okta_prehire_days} days before their start date), movers change attributes and department group,
+leavers flip <code>active</code> / <code>account_status</code> on their termination date.</p>
+<div class="grid2">
+<div class="grp"><div class="gh">1. Okta Provisioning Agent (On-Premises Provisioning) - SCIM feed</div><div class="gb">
+<div class="fl" style="max-width:100%">{fld('SCIM 1.1 base URL:', base + '/hr/scim/v1')}{fld('SCIM 2.0 base URL:', base + '/hr/scim/v2')}
+{fld('Authentication:', 'Bearer ' + tok + '  or header ' + config.hr_scim_header + ': ' + tok + '  or Basic ' + config.api_user + ':' + config.api_password if cfg['scimAuth'] != 'off' else 'off (PS_HR_SCIM_AUTH=off)')}
+{fld('Capabilities:', caps)}{fld('Users in feed:', str(len(vis)) + ('  (' + str(total - len(vis)) + ' pre-hire(s) hidden until their window)' if total - len(vis) else ''))}
+{fld('Groups (departments):', conn.execute('SELECT COUNT(*) FROM PS_DEPT_TBL').fetchone()[0])}{fld('Write-back (PUT):', 'enabled' if cfg['scimWriteback'] else 'disabled - HR master is read-only')}</div>
+<pre>curl -H "Authorization: Bearer {e(tok)}" "{e(base)}/hr/scim/v1/Users?startIndex=1&count=100"
+curl -H "Authorization: Bearer {e(tok)}" "{e(base)}/hr/scim/v1/Users?filter=meta.lastModified gt \"2026-01-01T00:00:00Z\""
+curl -H "Authorization: Bearer {e(tok)}" "{e(base)}/hr/scim/v1/Users?filter=userName eq \"margaret.chen@gbi.example.com\""
+curl -H "Authorization: Bearer {e(tok)}" {e(base)}/hr/scim/v1/Users/100001
+curl -H "Authorization: Bearer {e(tok)}" {e(base)}/hr/scim/v1/Groups
+curl -H "Authorization: Bearer {e(tok)}" {e(base)}/hr/scim/v1/ServiceProviderConfigs</pre>
+<b>Okta setup</b><ol style="margin:4px 0 0 18px;line-height:1.7">
+<li>Install the <b>Okta Provisioning Agent</b> on a host that can reach this server (Settings &gt; Downloads). Allow HTTP for a demo (<code>-allowHttp true</code>) or put a TLS proxy in front.</li>
+<li>Add the app: <b>Applications &gt; Browse App Catalog &gt; On-Premises Provisioning</b> (or SCIM 2.0 with the <i>OPP Agent with SCIM 2.0 support</i> feature), Provisioning tab &gt; Integration: base URL above, agent, and the auth header.</li>
+<li>Enable <b>To Okta</b> imports (schedule them; incremental imports use <code>meta.lastModified gt</code>). Map attributes: userName&rarr;login, name, emails, title, enterprise employeeNumber/department/manager, plus the <code>{e(hrscim.CUSTOM)}</code> attributes you want (emplStatus, jobcode, hireDate, terminationDate...).</li>
+<li>Provisioning tab &gt; Provisioning &gt; Edit &gt; <b>Profile Source &gt; Enable</b>. PeopleSoft is now the identity authority: Okta users are created, updated and deactivated from imports.</li>
+<li>Run an import, confirm the matched users, and watch the <a href="/journey">Lifecycle Journey</a> flow through on the next import.</li></ol></div></div>
+<div class="grp"><div class="gh">2. Okta On-prem Connector for Generic Databases (Identity Governance) - SQL mirror</div><div class="gb">
+<div class="fl" style="max-width:100%">{fld('Export dialect:', cfg['sqlExportDialect'] or 'off (set PS_SQL_EXPORT_DIALECT=postgres | mysql | mssql)')}{fld('Export file:', exp.get('file') or '-')}
+{fld('Last written:', exp.get('modified') or '-')}{fld('Interval:', str(cfg['sqlExportInterval']) + ' s')}</div>
+<pre>curl -u {e(config.api_user)}:{e(config.api_password)} "{e(base)}/api/v1/export/sql?dialect=postgres" | psql "postgresql://hr:hr@localhost:5432/hrmaster"
+python3 -m peopleschoft export-sql --dialect mysql &gt; hr_master.sql
+python3 scripts/generate_docker.py --with-hr-db --force   # compose: Postgres + a mirror job that loads the export every {cfg['sqlExportInterval']}s</pre>
+<b>Connector settings (Provisioning tab &gt; Schema discovery &amp; Import)</b>
+<table class="grid"><tr><th>Field</th><th>Value</th></tr>{crows}</table>
+<p class="muted">The mirror keeps the connector's requirements: soft deletes (<code>is_deleted</code>), an auto-updating <code>last_update_dttm</code> on every table (trigger on PostgreSQL/MySQL), and <code>account_status</code> for the Account Status Attribute. Needs Okta Identity Governance and the EA features listed in Okta's guide.</p></div></div></div>
+<div class="grp"><div class="gh">Sample SCIM 1.1 user from the feed</div><div class="gb"><pre>{e(json.dumps(sample, indent=1))}</pre></div></div></div>"""
+    return layout(req, "HR as a Source", body, 'Integration Broker &gt; <b>HR as a Source</b>')

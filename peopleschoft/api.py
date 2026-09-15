@@ -1,7 +1,7 @@
 """JSON REST API (clean /api/v1 routes + PeopleSoft Integration Broker style aliases) and SCIM routes."""
 import json
 
-from . import db, hr, okta, scim
+from . import db, hr, hrscim, okta, scim, sqlexport
 from .config import config
 from .journey import run_journey
 from .routing import Response, json_response, route
@@ -274,3 +274,98 @@ def scim_groups(req, conn):
 @route("POST,PUT,PATCH,DELETE", S + r"/Groups(?:/[^/]+)?")
 def scim_groups_unsupported(req, conn):
     raise scim.ScimError(501, "Group provisioning is not supported by this emulator")
+
+
+# ---------------------------------------------------------------------- HR as a source: SCIM feed (Okta Provisioning Agent)
+HR = r"/hr/scim/v(?P<v>[12])"
+
+
+def _hs(data, version, status=200):
+    return json_response(data, status, "application/json" if version == 1 else "application/scim+json")
+
+
+def _ver(v):
+    return int(v)
+
+
+@route("GET", HR + r"/ServiceProviderConfigs?")
+def hr_spc(req, conn, v):
+    return _hs(hrscim.service_provider_config(req.base_url, _ver(v)), _ver(v))
+
+
+@route("GET", HR + r"/ResourceTypes")
+def hr_rt(req, conn, v):
+    return _hs(hrscim.resource_types(req.base_url), _ver(v))
+
+
+@route("GET", HR + r"/Schemas")
+def hr_schemas(req, conn, v):
+    return _hs(hrscim.schemas(req.base_url), _ver(v))
+
+
+@route("GET", HR + r"/Users")
+def hr_users(req, conn, v):
+    return _hs(hrscim.list_users(conn, req.base_url, _ver(v), req.query.get("filter"), req.int_query("startIndex", 1), req.int_query("count", 100)), _ver(v))
+
+
+@route("GET", HR + r"/Users/(?P<emplid>[^/]+)")
+def hr_user(req, conn, v, emplid):
+    return _hs(hrscim.get_user(conn, emplid, req.base_url, _ver(v)), _ver(v))
+
+
+@route("PUT", HR + r"/Users/(?P<emplid>[^/]+)")
+def hr_user_put(req, conn, v, emplid):
+    return _hs(hrscim.replace_user(conn, emplid, req.json(), req.base_url, _ver(v)), _ver(v))
+
+
+@route("POST,PATCH,DELETE", HR + r"/Users(?:/[^/]+)?")
+def hr_user_readonly(req, conn, v):
+    raise hrscim.HrScimError(405, "PeopleSchoft is the HR master: users are created and terminated here, then imported into Okta. "
+                                  "Only GET (and PUT when PS_HR_SCIM_WRITEBACK=1) are supported.")
+
+
+@route("GET", HR + r"/Groups")
+def hr_groups(req, conn, v):
+    return _hs(hrscim.list_groups(conn, req.base_url, _ver(v), req.int_query("startIndex", 1), req.int_query("count", 100)), _ver(v))
+
+
+@route("GET", HR + r"/Groups/(?P<deptid>[^/]+)")
+def hr_group(req, conn, v, deptid):
+    return _hs(hrscim.get_group(conn, deptid, req.base_url, _ver(v)), _ver(v))
+
+
+@route("POST,PUT,PATCH,DELETE", HR + r"/Groups(?:/[^/]+)?")
+def hr_group_readonly(req, conn, v):
+    raise hrscim.HrScimError(405, "Groups are PeopleSoft departments and are read-only in the HR master feed.")
+
+
+# ---------------------------------------------------------------------- HR as a source: SQL export (Generic Databases connector)
+@route("GET", r"/api/v1/export/sql")
+def export_sql(req, conn):
+    dialect = req.query.get("dialect", config.sql_export_dialect or "postgres")
+    try:
+        text = sqlexport.render(conn, dialect, req.query.get("since"), req.query.get("ddl", "1") != "0")
+    except ValueError as ex:
+        return json_response({"error": str(ex)}, 400)
+    return Response(text, 200, "application/sql; charset=utf-8", {"Content-Disposition": f'inline; filename="hr_master.{dialect}.sql"'})
+
+
+@route("GET", r"/api/v1/hr-master/status")
+def hr_master_status(req, conn):
+    workers, total = hr.list_workers(conn, limit=100000)
+    vis = [w for w in workers if hrscim.visible(w)]
+    exp = latest_export()
+    return json_response({"config": config.hr_master_summary(), "capabilities": hrscim.capabilities(),
+                          "feed": {"v1": f"{req.base_url}/hr/scim/v1", "v2": f"{req.base_url}/hr/scim/v2", "users": len(vis), "hiddenPreHires": total - len(vis),
+                                   "groups": conn.execute("SELECT COUNT(*) FROM PS_DEPT_TBL").fetchone()[0]},
+                          "sqlExport": exp, "connectorSettings": sqlexport.connector_settings()})
+
+
+def latest_export():
+    d = config.sql_export_dir
+    files = sorted(d.glob("hr_master.*.sql")) if d.exists() else []
+    if not files:
+        return {"file": None}
+    f = files[-1]
+    st = f.stat()
+    return {"file": str(f), "bytes": st.st_size, "modified": db.datetime.fromtimestamp(st.st_mtime, db.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")}

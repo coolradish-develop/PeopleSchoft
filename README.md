@@ -134,6 +134,51 @@ To show Okta provisioning *into* PeopleSoft user profiles, add an app in Okta:
 Users Okta assigns to the app appear under **User Profiles (SCIM)** as `PSOPRDEFN` rows, linked to
 the EMPLID by `employeeNumber` or work email. Deactivation locks the account (`ACCTLOCK=1`).
 
+### HR as a source: Okta imports from PeopleSchoft (profile master)
+
+Two read-only feeds of the same PeopleSoft data let Okta treat this system as the identity authority.
+Joiners appear when hired (pre-hires `OKTA_PREHIRE_DAYS` before their start date), movers change
+attributes and department group, leavers flip `active` on their termination date. **HR as a Source**
+in the NavBar (`/hr-master`) shows live values, sample records and the setup steps.
+
+**A. Okta Provisioning Agent (On-Premises Provisioning) - SCIM feed**
+
+| | |
+|---|---|
+| SCIM 1.1 base URL | `<PS_PUBLIC_URL>/hr/scim/v1` (what the agent speaks by default) |
+| SCIM 2.0 base URL | `<PS_PUBLIC_URL>/hr/scim/v2` (agents with *OPP Agent with SCIM 2.0 support*) |
+| Auth | `Authorization: Bearer <PS_HR_SCIM_TOKEN>`, header `X-HR-Token`, or Basic API credentials (`PS_HR_SCIM_AUTH=off` to disable) |
+| Capabilities | `IMPORT_NEW_USERS`, `IMPORT_PROFILE_UPDATES`, `OPP_SCIM_INCREMENTAL_IMPORTS` (+ push capabilities when `PS_HR_SCIM_WRITEBACK=1`) |
+| Endpoints | `ServiceProviderConfigs`, `Users` (`startIndex`, `count`, filters `userName eq`, `id eq`, `employeeNumber eq`, `meta.lastModified gt`), `Users/{emplid}`, `Groups` (departments with members), `Groups/{deptid}` |
+
+Users carry the core schema, the enterprise extension (employeeNumber, department, manager, organization, division,
+costCenter) and `urn:okta:peopleschoft:1.0:user` with the PeopleSoft job attributes (emplStatus, action, jobcode,
+location, hireDate, terminationDate, supervisorId...). Writes are refused with 405 because PeopleSoft is the master;
+set `PS_HR_SCIM_WRITEBACK=1` to accept Okta's `PUT` pushes (profile update, deactivate → TER, reactivate → REH).
+
+Okta side: install the Okta Provisioning Agent where it can reach this server, add the **On-Premises Provisioning**
+app, enter the base URL and auth header on the Provisioning tab, enable and schedule **To Okta** imports (incremental
+imports use `meta.lastModified gt`), map the attributes, then **Provisioning > Edit > Profile Source > Enable**.
+
+**B. Okta On-prem Connector for Generic Databases (Identity Governance) - SQL mirror**
+
+The connector reads users and entitlements with SQL you configure and requires soft deletes, an auto-updating
+timestamp column and an account-status column. PeopleSchoft renders exactly that schema as idempotent upserts:
+
+```
+python3 -m peopleschoft export-sql --dialect postgres > hr_master.sql       # also mysql | mssql
+curl -u PS:PS "http://localhost:8080/api/v1/export/sql?dialect=postgres&since=2026-09-01T00:00:00Z"
+PS_SQL_EXPORT_DIALECT=postgres    # server writes data/export/hr_master.postgres.sql every PS_SQL_EXPORT_INTERVAL s
+python3 scripts/generate_docker.py --with-hr-db --force   # compose adds Postgres (hr-db :5432) + a mirror job
+```
+
+Tables: `hr_worker` (one row per person, `account_status` ACTIVE/INACTIVE, `is_deleted`, `last_update_dttm`),
+`hr_entitlement` (departments, job codes, PeopleSoft roles), `hr_worker_entitlement` (assignments, soft-deleted on
+transfer), and view `hr_worker_v` (users plus a comma-separated `entitlements` column). Connector field values
+(Get Users, User ID column `emplid`, Account Status Attribute `account_status` = `ACTIVE`, Incremental Import
+`... WHERE last_update_dttm > ?`, Get All Entitlements) are listed on `/hr-master`. Needs Okta Identity Governance
+and the EA features named in Okta's guide.
+
 ### Okta Access Gateway (header-based sign-on to the UI)
 OAG authenticates users against Okta, then reverse-proxies to the app with identity headers. Real PeopleSoft reads
 such a header through Signon PeopleCode; this emulator does the same when `PS_UI_AUTH=header`:
@@ -224,6 +269,7 @@ python3 -m peopleschoft reset --yes           # wipe and re-seed
 python3 -m peopleschoft demo                  # run the journey and sync
 python3 -m peopleschoft okta-sync             # flush the outbox once
 python3 -m peopleschoft export                # queue a snapshot of every worker (initial load)
+python3 -m peopleschoft export-sql --dialect postgres   # HR master SQL for the Generic Databases connector
 python3 -m peopleschoft status
 python3 -m unittest -v                        # tests
 ```
@@ -239,6 +285,7 @@ peopleschoft/
   server.py     HTTP server, auth, sync thread journey.py   guided joiner/mover/leaver/rehire
 scripts/mock_okta.py      fake Okta org        scripts/mock_oag.py       fake Okta Access Gateway (header SSO)
 scripts/demo_journey.sh   curl walk-through    peopleschoft/sso.py       header-based sign-on
+peopleschoft/hrscim.py    HR-as-a-source SCIM feed (Okta Provisioning Agent)    peopleschoft/sqlexport.py  HR-as-a-source SQL mirror (Generic DB connector)
 tests/test_lifecycle.py   unit + HTTP tests    data/peopleschoft.db      the database (auto-created)
 ```
 

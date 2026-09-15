@@ -11,6 +11,8 @@ demo:         ## Run the joiner/mover/leaver/rehire journey from the CLI
 	python3 -m peopleschoft demo
 sync:         ## Flush the Okta outbox once
 	python3 -m peopleschoft okta-sync
+export-sql:   ## Print HR master SQL for the Okta Generic Databases connector (DIALECT=postgres|mysql|mssql)
+	python3 -m peopleschoft export-sql --dialect $(or $(DIALECT),postgres)
 status:       ## Counts + Okta configuration
 	python3 -m peopleschoft status
 test:         ## Run the unit tests

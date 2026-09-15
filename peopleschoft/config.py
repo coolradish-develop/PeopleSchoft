@@ -91,6 +91,27 @@ class Config:
     @property
     def scim_token(self): return _env("PS_SCIM_TOKEN", "peopleschoft-scim-token")
 
+    # --- HR as a source: SCIM feed for the Okta Provisioning Agent + SQL export for the Generic Databases connector ---
+    @property
+    def hr_scim_auth(self): return _env("PS_HR_SCIM_AUTH", "token").lower()      # token | off
+    @property
+    def hr_scim_token(self): return _env("PS_HR_SCIM_TOKEN", "peopleschoft-hr-token")
+    @property
+    def hr_scim_header(self): return _env("PS_HR_SCIM_HEADER", "X-HR-Token")
+    @property
+    def hr_scim_writeback(self): return _bool("PS_HR_SCIM_WRITEBACK", False)
+    @property
+    def sql_export_dialect(self): return _env("PS_SQL_EXPORT_DIALECT", "").lower()  # '' = off | postgres | mysql | mssql
+    @property
+    def sql_export_interval(self): return int(_env("PS_SQL_EXPORT_INTERVAL", "30"))
+    @property
+    def sql_export_dir(self): return Path(_env("PS_SQL_EXPORT_DIR", str(self.db_path.parent / "export")))
+
+    def hr_master_summary(self):
+        return {"scimAuth": self.hr_scim_auth, "scimTokenSet": bool(self.hr_scim_token), "scimHeader": self.hr_scim_header,
+                "scimWriteback": self.hr_scim_writeback, "sqlExportDialect": self.sql_export_dialect or None,
+                "sqlExportInterval": self.sql_export_interval, "sqlExportDir": str(self.sql_export_dir)}
+
     # --- Okta outbound ---
     @property
     def okta_mode(self): return _env("OKTA_MODE", "dryrun").lower()   # dryrun | webhook | users | identity-source

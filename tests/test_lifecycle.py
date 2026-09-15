@@ -375,3 +375,97 @@ class SSOHttpTests(unittest.TestCase):
         self.assertEqual(self.get("/api/v1/workers", {"PS_SSO_UID": "margaret.chen@gbi.example.com"})[0], 200)
         self.assertEqual(self.get("/api/v1/workers")[0], 401)
         self.assertEqual(self.get("/scim/v2/Users", {"Authorization": "Bearer peopleschoft-scim-token"})[0], 200)
+
+
+class HrMasterTests(unittest.TestCase):
+    """HR-as-a-source: SCIM feed for the Okta Provisioning Agent and SQL export for the Generic Databases connector."""
+
+    def setUp(self):
+        self.conn = fresh_conn()
+        self.base = "http://hr"
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_feed_list_filter_and_paging(self):
+        from peopleschoft import hrscim
+        page = hrscim.list_users(self.conn, self.base, 1, None, 1, 10)
+        self.assertEqual((page["totalResults"], page["itemsPerPage"], page["startIndex"]), (32, 10, 1))
+        self.assertEqual(page["schemas"], ["urn:scim:schemas:core:1.0"])
+        u = page["Resources"][0]
+        self.assertEqual((u["id"], u["userName"], u["active"]), ("100001", "margaret.chen@gbi.example.com", True))
+        self.assertEqual(u["urn:scim:schemas:extension:enterprise:1.0"]["employeeNumber"], "100001")
+        self.assertIn("urn:okta:peopleschoft:1.0:user", u)
+        last = hrscim.list_users(self.conn, self.base, 1, None, 31, 10)
+        self.assertEqual(last["itemsPerPage"], 2)
+        f = hrscim.list_users(self.conn, self.base, 1, 'userName eq "MARGARET.chen@gbi.example.com"')
+        self.assertEqual(f["totalResults"], 1)
+        f = hrscim.list_users(self.conn, self.base, 1, 'urn:scim:schemas:extension:enterprise:1.0.employeeNumber eq "100026"')
+        self.assertEqual((f["totalResults"], f["Resources"][0]["active"]), (1, False))
+        self.assertEqual(hrscim.list_users(self.conn, self.base, 1, 'userName eq "nobody"')["totalResults"], 0)
+        self.assertEqual(hrscim.list_users(self.conn, self.base, 1, 'meta.lastModified gt "2099-01-01T00:00:00Z"')["totalResults"], 0)
+        with self.assertRaises(hrscim.HrScimError):
+            hrscim.list_users(self.conn, self.base, 1, 'title co "x"')
+        v2 = hrscim.list_users(self.conn, self.base, 2, None, 1, 1)
+        self.assertEqual(v2["schemas"], ["urn:ietf:params:scim:api:messages:2.0:ListResponse"])
+        self.assertEqual(v2["Resources"][0]["schemas"][0], "urn:ietf:params:scim:schemas:core:2.0:User")
+
+    def test_incremental_and_prehire_window(self):
+        from peopleschoft import hrscim
+        import time
+        time.sleep(1.1)
+        ts = db.now_iso()
+        time.sleep(1.1)
+        hr.promote(self.conn, "100011", "SWE4", effdt=TODAY, comp_rate=1)
+        f = hrscim.list_users(self.conn, self.base, 1, f'meta.lastModified gt "{ts}"')
+        self.assertEqual([u["id"] for u in f["Resources"]], ["100011"])
+        far = hr.hire(self.conn, {"firstName": "Far", "lastName": "Future", "deptid": "13000", "jobcode": "SWE1",
+                                  "hireDate": (date.today() + timedelta(days=60)).isoformat()})
+        self.assertFalse(hrscim.visible(far))
+        with self.assertRaises(hrscim.HrScimError):
+            hrscim.get_user(self.conn, far["emplid"], self.base, 1)
+        near = hr.get_worker(self.conn, "100032")
+        self.assertTrue(hrscim.visible(near))
+        self.assertTrue(hrscim.to_user(near, self.base, 1)["active"])
+
+    def test_groups_and_capabilities(self):
+        from peopleschoft import hrscim
+        g = hrscim.list_groups(self.conn, self.base, 1)
+        self.assertEqual(g["totalResults"], 10)
+        eng = hrscim.get_group(self.conn, "13000", self.base, 1)
+        self.assertIn({"value": "100011", "display": "Hannah Schmidt"}, eng["members"])
+        spc = hrscim.service_provider_config(self.base, 1)
+        self.assertIn("IMPORT_NEW_USERS", spc["urn:okta:schemas:scim:providerconfig:1.0"]["userManagementCapabilities"])
+        with self.assertRaises(hrscim.HrScimError) as cm:
+            hrscim.replace_user(self.conn, "100001", {"active": False}, self.base, 1)
+        self.assertEqual(cm.exception.status, 405)
+
+    def test_writeback_when_enabled(self):
+        from peopleschoft import hrscim
+        os.environ["PS_HR_SCIM_WRITEBACK"] = "1"
+        try:
+            u = hrscim.replace_user(self.conn, "100013", {"name": {"givenName": "Sofia", "familyName": "Rossi-Bianchi"}, "active": False}, self.base, 1)
+            self.assertEqual((u["active"], u["name"]["familyName"]), (False, "Rossi-Bianchi"))
+            self.assertEqual(hr.get_worker(self.conn, "100013")["emplStatus"], "T")
+        finally:
+            os.environ.pop("PS_HR_SCIM_WRITEBACK", None)
+
+    def test_sql_export_loads_and_tracks_changes(self):
+        import sqlite3
+        from peopleschoft import sqlexport
+        mirror = sqlite3.connect(":memory:")
+        mirror.executescript(sqlexport.render(self.conn, "sqlite"))
+        self.assertEqual(mirror.execute("SELECT COUNT(*) FROM hr_worker").fetchone()[0], 32)
+        self.assertEqual(mirror.execute("SELECT account_status FROM hr_worker WHERE emplid='100026'").fetchone()[0], "INACTIVE")
+        self.assertEqual(mirror.execute("SELECT entitlements FROM hr_worker_v WHERE emplid='100001'").fetchone()[0],
+                         "DEPT:10000,JOBCODE:CEO001,ROLE:Employee,ROLE:PeopleSoft User")
+        hr.transfer(self.conn, "100011", deptid="13100", location="AUS01", supervisor_id="100014")
+        mirror.executescript(sqlexport.render(self.conn, "sqlite", include_ddl=False))
+        self.assertEqual(mirror.execute("SELECT department FROM hr_worker WHERE emplid='100011'").fetchone()[0], "Platform Engineering")
+        self.assertEqual(mirror.execute("SELECT is_deleted FROM hr_worker_entitlement WHERE emplid='100011' AND entitlement_id='DEPT:13000'").fetchone()[0], 1)
+        for d in ("postgres", "mysql", "mssql"):
+            text = sqlexport.render(self.conn, d)
+            self.assertNotIn("None", text)
+            self.assertIn("hr_worker_v", text)
+        with self.assertRaises(ValueError):
+            sqlexport.render(self.conn, "oracle")

@@ -56,6 +56,9 @@ COMPOSE = """services:
       PS_PORT: "{port}"
       PS_PUBLIC_URL: "${{PS_PUBLIC_URL:-http://localhost:{port}}}"
       PS_RELOAD: "${{PS_RELOAD:-1}}"
+      # HR-as-a-source SQL mirror (Okta On-prem Connector for Generic Databases); '' = off
+      PS_SQL_EXPORT_DIALECT: "${{PS_SQL_EXPORT_DIALECT:-{sql_dialect}}}"
+      PS_SQL_EXPORT_INTERVAL: "${{PS_SQL_EXPORT_INTERVAL:-{interval}}}"
       # Okta outbound: dryrun | webhook | users | identity-source  (see .env.example)
       OKTA_MODE: "${{OKTA_MODE:-dryrun}}"
       OKTA_ORG_URL: "${{OKTA_ORG_URL:-https://dev-000000.okta.com}}"
@@ -66,15 +69,45 @@ COMPOSE = """services:
     volumes:
       - peopleschoft-data:/app/data
 {live}    restart: unless-stopped
-{mock}
+{mock}{hrdb}
 volumes:
   peopleschoft-data:
-"""
+{hrdb_volume}"""
 
 LIVE_MOUNTS = """      # Live code: the container runs the source from this checkout, so edits need no image rebuild.
       # With PS_RELOAD=1 the server restarts itself when a file in peopleschoft/ changes.
       - ./peopleschoft:/app/peopleschoft:ro
       - ./scripts:/app/scripts:ro
+"""
+
+HR_DB_SERVICES = """
+  # HR master mirror for the Okta On-prem Connector for Generic Databases: PeopleSchoft writes
+  # data/export/hr_master.postgres.sql every PS_SQL_EXPORT_INTERVAL seconds; hr-mirror loads it into Postgres.
+  # Point the Okta connector at this database (host: your machine, port 5432, db hrmaster, user hr / password hr).
+  hr-db:
+    image: postgres:16
+    container_name: hr-db
+    environment:
+      POSTGRES_DB: hrmaster
+      POSTGRES_USER: hr
+      POSTGRES_PASSWORD: hr
+    ports:
+      - "5432:5432"
+    volumes:
+      - hr-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+  hr-mirror:
+    image: postgres:16
+    container_name: hr-mirror
+    depends_on:
+      - hr-db
+      - peopleschoft
+    environment:
+      PGPASSWORD: hr
+    volumes:
+      - peopleschoft-data:/export:ro
+    entrypoint: ["bash", "-c", "until pg_isready -h hr-db -U hr >/dev/null 2>&1; do sleep 2; done; while true; do if [ -f /export/export/hr_master.postgres.sql ]; then psql -h hr-db -U hr -d hrmaster -q -v ON_ERROR_STOP=0 -f /export/export/hr_master.postgres.sql >/dev/null 2>&1 && echo \\"$(date -u +%FT%TZ) mirrored hr_master.postgres.sql\\"; fi; sleep {interval}; done"]
+    restart: unless-stopped
 """
 
 MOCK_SERVICE = """
@@ -101,10 +134,13 @@ __pycache__/
 """
 
 
-def render(port, python, with_mock, live=True):
+def render(port, python, with_mock, live=True, with_hr_db=False, interval=30):
     return {
         "Dockerfile": DOCKERFILE.format(port=port, python=python),
-        "docker-compose.yml": COMPOSE.format(port=port, mock=MOCK_SERVICE if with_mock else "", live=LIVE_MOUNTS if live else ""),
+        "docker-compose.yml": COMPOSE.format(port=port, mock=MOCK_SERVICE if with_mock else "", live=LIVE_MOUNTS if live else "",
+                                             hrdb=HR_DB_SERVICES.format(interval=interval) if with_hr_db else "",
+                                             hrdb_volume="  hr-db-data:\n" if with_hr_db else "",
+                                             sql_dialect="postgres" if with_hr_db else "", interval=interval),
         ".dockerignore": DOCKERIGNORE,
     }
 
@@ -115,12 +151,14 @@ def main():
     ap.add_argument("--python", default="3.12", help="python base image tag (default 3.12)")
     ap.add_argument("--no-mock", action="store_true", help="omit the mock-okta service from the compose file")
     ap.add_argument("--no-live", action="store_true", help="do not mount the source tree; the image is self-contained and needs a rebuild per change")
+    ap.add_argument("--with-hr-db", action="store_true", help="add a Postgres HR-master mirror (hr-db on :5432) for the Okta On-prem Connector for Generic Databases")
+    ap.add_argument("--mirror-interval", type=int, default=30, help="seconds between HR mirror refreshes (default 30)")
     ap.add_argument("--out", default=str(ROOT), help="directory to write into (default: repo root)")
     ap.add_argument("--print", action="store_true", help="print the files instead of writing them")
     ap.add_argument("--force", action="store_true", help="overwrite existing files")
     a = ap.parse_args()
 
-    files = render(a.port, a.python, not a.no_mock, not a.no_live)
+    files = render(a.port, a.python, not a.no_mock, not a.no_live, a.with_hr_db, a.mirror_interval)
     out = Path(a.out)
     if a.print:
         for name, content in files.items():
@@ -144,7 +182,12 @@ Next steps:
 After a code change: nothing to do{'' if a.no_live else ' - the source is mounted and PS_RELOAD=1 restarts the server by itself'}.
   docker compose logs -f peopleschoft      # watch for "[reload] ... restarting server"
 Rebuild only if the Dockerfile itself changes:  docker compose up -d --build
-
+{'' if not a.with_hr_db else f'''
+HR master mirror for the Okta On-prem Connector (Generic Databases):
+  Postgres at localhost:5432, database hrmaster, user hr, password hr (tables hr_worker, hr_entitlement, hr_worker_entitlement, view hr_worker_v)
+  docker compose logs -f hr-mirror              # prints "mirrored hr_master.postgres.sql" every {a.mirror_interval}s
+  Connector SQL values: open http://localhost:{a.port}/hr-master
+'''}
 Okta against the mock inside compose:
   OKTA_MODE=users OKTA_ORG_URL=http://mock-okta:9090 OKTA_API_TOKEN=mock docker compose up -d
 """)
