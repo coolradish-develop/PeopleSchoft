@@ -796,7 +796,7 @@ leavers flip <code>active</code> / <code>account_status</code> on their terminat
 {fld('Groups (departments):', conn.execute('SELECT COUNT(*) FROM PS_DEPT_TBL').fetchone()[0])}{fld('Write-back (PUT):', 'enabled' if cfg['scimWriteback'] else 'disabled - HR master is read-only')}</div>
 <pre>curl -H "Authorization: Bearer {e(tok)}" "{e(base)}/hr/scim/v1/Users?startIndex=1&count=100"
 curl -H "Authorization: Bearer {e(tok)}" "{e(base)}/hr/scim/v1/Users?filter=meta.lastModified gt \"2026-01-01T00:00:00Z\""
-curl -H "Authorization: Bearer {e(tok)}" "{e(base)}/hr/scim/v1/Users?filter=userName eq \"margaret.chen@gbi.example.com\""
+curl -H "Authorization: Bearer {e(tok)}" "{e(base)}/hr/scim/v1/Users?filter=userName eq \"margaret.chen@atko.email\""
 curl -H "Authorization: Bearer {e(tok)}" {e(base)}/hr/scim/v1/Users/100001
 curl -H "Authorization: Bearer {e(tok)}" {e(base)}/hr/scim/v1/Groups
 curl -H "Authorization: Bearer {e(tok)}" {e(base)}/hr/scim/v1/ServiceProviderConfigs</pre>

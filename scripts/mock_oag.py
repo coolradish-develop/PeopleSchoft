@@ -21,10 +21,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ARGS = None
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade", "content-length", "host"}
 PRESETS = [
-    ("margaret.chen@gbi.example.com", "Margaret Chen", "Everyone,Executives,HR Administrator"),
-    ("aisha.mohammed@gbi.example.com", "Aisha Mohammed", "Everyone,HR Administrator"),
-    ("hannah.schmidt@gbi.example.com", "Hannah Schmidt", "Everyone,Engineering"),
-    ("amara.diallo@gbi.example.com", "Amara Diallo", "Everyone,IT,Okta Administrators"),
+    ("margaret.chen@atko.email", "Margaret Chen", "Everyone,Executives,HR Administrator"),
+    ("aisha.mohammed@atko.email", "Aisha Mohammed", "Everyone,HR Administrator"),
+    ("hannah.schmidt@atko.email", "Hannah Schmidt", "Everyone,Engineering"),
+    ("amara.diallo@atko.email", "Amara Diallo", "Everyone,IT,Okta Administrators"),
     ("new.contractor@partner.example", "New Contractor", "Everyone"),
 ]
 

@@ -60,7 +60,7 @@ class LifecycleTests(unittest.TestCase):
         self.id = self.w["emplid"]
 
     def test_hire_defaults(self):
-        self.assertEqual(self.w["workEmail"], "ada.lovelace@gbi.example.com")
+        self.assertEqual(self.w["workEmail"], "ada.lovelace@atko.email")
         self.assertEqual(self.w["job"]["location"], "SFHQ")  # from department
         self.assertEqual(self.w["emplStatus"], "A")
         self.assertEqual(self.w["job"]["action"], "HIR")
@@ -116,8 +116,8 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(st["worker.termination_scheduled"], "DRYRUN")
 
     def test_personal_data_change(self):
-        w = hr.update_personal(self.conn, self.id, {"lastName": "King", "workEmail": "ada.king@gbi.example.com"})
-        self.assertEqual((w["displayName"], w["workEmail"]), ("Ada King", "ada.king@gbi.example.com"))
+        w = hr.update_personal(self.conn, self.id, {"lastName": "King", "workEmail": "ada.king@atko.email"})
+        self.assertEqual((w["displayName"], w["workEmail"]), ("Ada King", "ada.king@atko.email"))
         ev = db.row(self.conn, "SELECT ACTION_REASON, PAYLOAD FROM PS_OKTA_EVENTS WHERE EMPLID=? ORDER BY EVENT_ID DESC LIMIT 1", (self.id,))
         self.assertEqual(ev["ACTION_REASON"], "NAM")
         self.assertIn("lastName", json.loads(ev["PAYLOAD"])["changes"])
@@ -144,7 +144,7 @@ class OktaMappingTests(unittest.TestCase):
     def test_profile_and_status(self):
         w = hr.get_worker(self.conn, "100011")
         p = self.client.profile_from_worker(w)
-        self.assertEqual(p["login"], "hannah.schmidt@gbi.example.com")
+        self.assertEqual(p["login"], "hannah.schmidt@atko.email")
         self.assertEqual(p["employeeNumber"], "100011")
         self.assertEqual(p["managerId"], "100010")
         self.assertEqual(p["title"], "Senior Software Engineer")
@@ -185,7 +185,7 @@ class OktaMappingTests(unittest.TestCase):
         ws = [hr.get_worker(self.conn, "100011"), hr.get_worker(self.conn, "100026")]
         steps = self.client.plan_identity_source(ws)
         self.assertEqual([s["note"] for s in steps], ["Create import session", "Upsert joiners/movers", "Delete leavers", "Trigger import"])
-        self.assertEqual(steps[1]["body"]["profiles"][0]["profile"]["userName"], "hannah.schmidt@gbi.example.com")
+        self.assertEqual(steps[1]["body"]["profiles"][0]["profile"]["userName"], "hannah.schmidt@atko.email")
         self.assertEqual(steps[2]["body"]["profiles"][0]["externalId"], "100026")
 
 
@@ -195,8 +195,8 @@ class ScimTests(unittest.TestCase):
         self.base = "http://test"
 
     def test_crud_and_linking(self):
-        body = {"userName": "hannah.schmidt@gbi.example.com", "name": {"givenName": "Hannah", "familyName": "Schmidt"},
-                "emails": [{"value": "hannah.schmidt@gbi.example.com", "primary": True}], "externalId": "00u1", "active": True}
+        body = {"userName": "hannah.schmidt@atko.email", "name": {"givenName": "Hannah", "familyName": "Schmidt"},
+                "emails": [{"value": "hannah.schmidt@atko.email", "primary": True}], "externalId": "00u1", "active": True}
         u = scim.create_user(self.conn, body, self.base)
         self.assertEqual(u[scim.ENT]["employeeNumber"], "100011")  # linked by email
         self.assertEqual(u["active"], True)
@@ -205,7 +205,7 @@ class ScimTests(unittest.TestCase):
         self.assertEqual(db.row(self.conn, "SELECT ACCTLOCK FROM PSOPRDEFN WHERE SCIM_ID=?", (u["id"],))["ACCTLOCK"], 1)
         u = scim.patch_user(self.conn, u["id"], {"Operations": [{"op": "replace", "path": "name.familyName", "value": "Berg"}]}, self.base)
         self.assertEqual(u["name"]["familyName"], "Berg")
-        lst = scim.list_users(self.conn, self.base, 'userName eq "HANNAH.schmidt@gbi.example.com"')
+        lst = scim.list_users(self.conn, self.base, 'userName eq "HANNAH.schmidt@atko.email"')
         self.assertEqual(lst["totalResults"], 1)
         with self.assertRaises(scim.ScimError) as cm:
             scim.create_user(self.conn, body, self.base)
@@ -267,7 +267,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.call("GET", "/scim/v2/Users", auth=None)[0], 401)
         st, body = self.call("GET", "/scim/v2/ServiceProviderConfig", auth="scim")
         self.assertEqual((st, body["patch"]["supported"]), (200, True))
-        st, body = self.call("POST", "/scim/v2/Users", {"userName": "new.user@gbi.example.com", "name": {"givenName": "New", "familyName": "User"}}, auth="scim")
+        st, body = self.call("POST", "/scim/v2/Users", {"userName": "new.user@atko.email", "name": {"givenName": "New", "familyName": "User"}}, auth="scim")
         self.assertEqual(st, 201)
         st, _ = self.call("DELETE", f"/scim/v2/Users/{body['id']}", auth="scim")
         self.assertEqual(st, 204)
@@ -298,16 +298,16 @@ class SSOTests(unittest.TestCase):
 
     def test_seeded_profile_and_roles(self):
         from peopleschoft import sso
-        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com"}, "127.0.0.1")
-        self.assertEqual((p.oprid, p.emplid, p.is_admin, p.created), ("margaret.chen@gbi.example.com", "100001", False, False))
-        p = sso.authenticate(self.conn, {"PS-SSO-UID": "margaret.chen@gbi.example.com", "PS_SSO_GROUPS": "Everyone, HR Administrator"}, "127.0.0.1")
+        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@atko.email"}, "127.0.0.1")
+        self.assertEqual((p.oprid, p.emplid, p.is_admin, p.created), ("margaret.chen@atko.email", "100001", False, False))
+        p = sso.authenticate(self.conn, {"PS-SSO-UID": "margaret.chen@atko.email", "PS_SSO_GROUPS": "Everyone, HR Administrator"}, "127.0.0.1")
         self.assertTrue(p.is_admin)
         self.assertIn("HR Administrator", p.roles)
         self.assertIsNotNone(db.row(self.conn, "SELECT LASTSIGNONDTTM FROM PSOPRDEFN WHERE OPRID=?", (p.oprid,))["LASTSIGNONDTTM"])
 
     def test_fallback_header_and_jit(self):
         from peopleschoft import sso
-        p = sso.authenticate(self.conn, {"OAM_REMOTE_USER": "hannah.schmidt@gbi.example.com"}, "127.0.0.1")
+        p = sso.authenticate(self.conn, {"OAM_REMOTE_USER": "hannah.schmidt@atko.email"}, "127.0.0.1")
         self.assertEqual((p.emplid, p.created, p.header_name), ("100011", True, "OAM_REMOTE_USER"))
         p = sso.authenticate(self.conn, {"PS_SSO_UID": "someone@okta.example", "PS_SSO_NAME": "Some One"}, "127.0.0.1")
         self.assertEqual((p.emplid, p.created, p.name), ("", True, "Some One"))
@@ -320,21 +320,21 @@ class SSOTests(unittest.TestCase):
         from peopleschoft import sso
         os.environ["PS_SSO_SECRET"] = "s3cret"
         with self.assertRaises(sso.SSOError):
-            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com"}, "127.0.0.1")
-        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com", "PS_SSO_SECRET": "s3cret"}, "127.0.0.1")
+            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@atko.email"}, "127.0.0.1")
+        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@atko.email", "PS_SSO_SECRET": "s3cret"}, "127.0.0.1")
         self.assertEqual(p.emplid, "100001")
         os.environ["PS_SSO_TRUSTED_PROXIES"] = "10.0.0.0/8, 192.168.1.5"
         with self.assertRaises(sso.SSOError):
-            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com", "PS_SSO_SECRET": "s3cret"}, "127.0.0.1")
-        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com", "PS_SSO_SECRET": "s3cret"}, "10.20.30.40")
+            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@atko.email", "PS_SSO_SECRET": "s3cret"}, "127.0.0.1")
+        p = sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@atko.email", "PS_SSO_SECRET": "s3cret"}, "10.20.30.40")
         self.assertEqual(p.emplid, "100001")
 
     def test_locked_profile(self):
         from peopleschoft import sso
-        self.conn.execute("UPDATE PSOPRDEFN SET ACCTLOCK=1 WHERE OPRID='margaret.chen@gbi.example.com'")
+        self.conn.execute("UPDATE PSOPRDEFN SET ACCTLOCK=1 WHERE OPRID='margaret.chen@atko.email'")
         self.conn.commit()
         with self.assertRaises(sso.SSOError) as cm:
-            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@gbi.example.com"}, "127.0.0.1")
+            sso.authenticate(self.conn, {"PS_SSO_UID": "margaret.chen@atko.email"}, "127.0.0.1")
         self.assertIn("locked", cm.exception.detail)
 
 
@@ -362,21 +362,21 @@ class SSOHttpTests(unittest.TestCase):
 
     def test_ui_requires_gateway_headers(self):
         self.assertEqual(self.get("/employees")[0], 401)
-        st, body = self.get("/employees/100001", {"PS_SSO_UID": "margaret.chen@gbi.example.com"})
+        st, body = self.get("/employees/100001", {"PS_SSO_UID": "margaret.chen@atko.email"})
         self.assertEqual(st, 200)
         self.assertIn("Read only", body)
-        st, _ = self.get("/employees/100001/personal", {"PS_SSO_UID": "margaret.chen@gbi.example.com"}, "POST", b"firstName=M&lastName=C")
+        st, _ = self.get("/employees/100001/personal", {"PS_SSO_UID": "margaret.chen@atko.email"}, "POST", b"firstName=M&lastName=C")
         self.assertEqual(st, 403)
-        st, body = self.get("/employees/100001/personal", {"PS_SSO_UID": "margaret.chen@gbi.example.com", "PS_SSO_GROUPS": "HR Administrator"},
-                            "POST", b"firstName=Margaret&lastName=Chen&preferredFirstName=Maggie&workEmail=margaret.chen@gbi.example.com")
+        st, body = self.get("/employees/100001/personal", {"PS_SSO_UID": "margaret.chen@atko.email", "PS_SSO_GROUPS": "HR Administrator"},
+                            "POST", b"firstName=Margaret&lastName=Chen&preferredFirstName=Maggie&workEmail=margaret.chen@atko.email")
         self.assertIn(st, (200, 303))   # urllib follows the 303 to the saved page
         self.assertIn("Saved", body) if st == 200 else None
-        self.assertEqual(self.get("/signon", {"PS_SSO_UID": "margaret.chen@gbi.example.com"})[0], 200)
+        self.assertEqual(self.get("/signon", {"PS_SSO_UID": "margaret.chen@atko.email"})[0], 200)
 
     def test_api_auth_still_works_in_gateway_mode(self):
         basic = {"Authorization": "Basic " + base64.b64encode(b"PS:PS").decode()}
         self.assertEqual(self.get("/api/v1/workers", basic)[0], 200)
-        self.assertEqual(self.get("/api/v1/workers", {"PS_SSO_UID": "margaret.chen@gbi.example.com"})[0], 200)
+        self.assertEqual(self.get("/api/v1/workers", {"PS_SSO_UID": "margaret.chen@atko.email"})[0], 200)
         self.assertEqual(self.get("/api/v1/workers")[0], 401)
         self.assertEqual(self.get("/scim/v2/Users", {"Authorization": "Bearer peopleschoft-scim-token"})[0], 200)
 
@@ -397,12 +397,12 @@ class HrMasterTests(unittest.TestCase):
         self.assertEqual((page["totalResults"], page["itemsPerPage"], page["startIndex"]), (32, 10, 1))
         self.assertEqual(page["schemas"], ["urn:scim:schemas:core:1.0"])
         u = page["Resources"][0]
-        self.assertEqual((u["id"], u["userName"], u["active"]), ("100001", "margaret.chen@gbi.example.com", True))
+        self.assertEqual((u["id"], u["userName"], u["active"]), ("100001", "margaret.chen@atko.email", True))
         self.assertEqual(u["urn:scim:schemas:extension:enterprise:1.0"]["employeeNumber"], "100001")
         self.assertIn("urn:okta:peopleschoft:1.0:user", u)
         last = hrscim.list_users(self.conn, self.base, 1, None, 31, 10)
         self.assertEqual(last["itemsPerPage"], 2)
-        f = hrscim.list_users(self.conn, self.base, 1, 'userName eq "MARGARET.chen@gbi.example.com"')
+        f = hrscim.list_users(self.conn, self.base, 1, 'userName eq "MARGARET.chen@atko.email"')
         self.assertEqual(f["totalResults"], 1)
         f = hrscim.list_users(self.conn, self.base, 1, 'urn:scim:schemas:extension:enterprise:1.0.employeeNumber eq "100026"')
         self.assertEqual((f["totalResults"], f["Resources"][0]["active"]), (1, False))
@@ -473,8 +473,8 @@ class HrMasterTests(unittest.TestCase):
         ts = db.now_iso()
         time.sleep(1.1)
         from peopleschoft import scim
-        u = scim.create_user(self.conn, {"userName": "hannah.schmidt@gbi.example.com", "roles": [{"value": "HR Administrator"}],
-                                         "emails": [{"value": "hannah.schmidt@gbi.example.com", "primary": True}]}, "http://t")
+        u = scim.create_user(self.conn, {"userName": "hannah.schmidt@atko.email", "roles": [{"value": "HR Administrator"}],
+                                         "emails": [{"value": "hannah.schmidt@atko.email", "primary": True}]}, "http://t")
         delta = sqlexport.render(self.conn, "sqlite", since=ts, include_ddl=False)
         self.assertIn("'100011'", delta)
         self.assertIn("ROLE:HR Administrator", delta)

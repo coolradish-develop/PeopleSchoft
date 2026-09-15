@@ -142,7 +142,7 @@ class Config:
 
     # --- demo data ---
     @property
-    def email_domain(self): return _env("PS_EMAIL_DOMAIN", "gbi.example.com")
+    def email_domain(self): return _env("PS_EMAIL_DOMAIN", "atko.email")
     @property
     def company(self): return _env("PS_COMPANY", "GBI")
 
