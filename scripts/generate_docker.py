@@ -289,7 +289,7 @@ def render(port, python, with_mock, live=True, with_hr_db=False, interval=30, en
         if engine == "postgres":
             files["hr-db/init.sql"] = HR_DB_INIT_SQL.format(okta_ops_password=okta_ops_password)
         files["opc-agent/Dockerfile"] = OPC_AGENT_DOCKERFILE
-        files["opc-agent/entrypoint.sh"] = OPC_AGENT_ENTRYPOINT
+        files["opc-agent/entrypoint.sh"] = OPC_AGENT_ENTRYPOINT.format()   # renders {{ }} to bash braces
         files[f"{agents_dir.rstrip('/')}/README.txt"] = (
             "Put the Okta agent rpm and the JDBC driver here, then: docker compose --profile agents up -d --build\n"
             "  OktaOnPremScimServer-<version>.rpm    Okta On-prem SCIM Server agent (1.5.0+, 1.7.0+ for Db2), Admin Console > Settings > Downloads\n"

@@ -11,6 +11,10 @@ services:
     environment:
       PS_PORT: "8080"
       PS_PUBLIC_URL: "${PS_PUBLIC_URL:-http://localhost:8080}"
+      PS_RELOAD: "${PS_RELOAD:-1}"
+      # HR-as-a-source SQL mirror (Okta On-prem Connector for Generic Databases); '' = off
+      PS_SQL_EXPORT_DIALECT: "${PS_SQL_EXPORT_DIALECT:-postgres}"
+      PS_SQL_EXPORT_INTERVAL: "${PS_SQL_EXPORT_INTERVAL:-30}"
       # Okta outbound: dryrun | webhook | users | identity-source  (see .env.example)
       OKTA_MODE: "${OKTA_MODE:-dryrun}"
       OKTA_ORG_URL: "${OKTA_ORG_URL:-https://dev-000000.okta.com}"
@@ -20,6 +24,10 @@ services:
       OKTA_WEBHOOK_TOKEN: "${OKTA_WEBHOOK_TOKEN:-}"
     volumes:
       - peopleschoft-data:/app/data
+      # Live code: the container runs the source from this checkout, so edits need no image rebuild.
+      # With PS_RELOAD=1 the server restarts itself when a file in peopleschoft/ changes.
+      - ./peopleschoft:/app/peopleschoft:ro
+      - ./scripts:/app/scripts:ro
     restart: unless-stopped
 
   # Fake Okta org so the users / webhook / identity-source modes work without a tenant.
@@ -34,5 +42,58 @@ services:
       - peopleschoft
     restart: unless-stopped
 
+  # HR master mirror for the Okta On-prem Connector for Generic Databases: PeopleSchoft writes
+  # data/export/hr_master.postgres.sql every PS_SQL_EXPORT_INTERVAL seconds; hr-mirror loads it into Postgres.
+  # Point the Okta connector at this database (host: your machine, port 5432, db hrmaster, user hr / password hr).
+  hr-db:
+    image: postgres:16
+    container_name: hr-db
+    environment:
+      POSTGRES_DB: hrmaster
+      POSTGRES_USER: hr
+      POSTGRES_PASSWORD: hr
+    ports:
+      - "5432:5432"      # the Okta On-prem SCIM Server agent connects here (Okta port table: PostgreSQL 5432)
+    volumes:
+      - hr-db-data:/var/lib/postgresql/data
+      - ./hr-db/init.sql:/docker-entrypoint-initdb.d/10-okta-ops.sql:ro   # creates the okta_ops admin user for the connector
+    command: ["postgres", "-c", "listen_addresses=*"]
+    restart: unless-stopped
+  hr-mirror:
+    image: postgres:16
+    container_name: hr-mirror
+    depends_on:
+      - hr-db
+      - peopleschoft
+    environment:
+      PGPASSWORD: hr
+    volumes:
+      - peopleschoft-data:/export:ro
+    entrypoint: ["bash", "-c", "until pg_isready -h hr-db -U hr >/dev/null 2>&1; do sleep 2; done; while true; do if [ -f /export/export/hr_master.postgres.sql ]; then psql -h hr-db -U hr -d hrmaster -q -v ON_ERROR_STOP=0 -f /export/export/hr_master.postgres.sql >/dev/null 2>&1 && echo \"$(date -u +%FT%TZ) mirrored hr_master.postgres.sql\"; fi; sleep 30; done"]
+    restart: unless-stopped
+
+  # RHEL-compatible container for the Okta agents (demo topology). Starts only with: docker compose --profile agents up -d
+  # Put the installers from Settings > Downloads into ./agents first. See README "Generic Databases connector".
+  opc-agent:
+    build: ./opc-agent
+    container_name: opc-agent
+    profiles: ["agents"]
+    environment:
+      OKTA_ORG_URL: "${OKTA_ORG_URL:-}"
+      OKTA_EULA_ACCEPT: "${OKTA_EULA_ACCEPT:-}"       # set to yes in .env to accept Okta's EULA for the agent
+      OPC_PROXY_HOST: "${OPC_PROXY_HOST:-}"
+      OPC_PROXY_PORT: "${OPC_PROXY_PORT:-}"
+      OPC_PROXY_SCHEME: "${OPC_PROXY_SCHEME:-http}"
+    volumes:
+      - ./OktaOnPremAgentResources:/agents:ro                          # OktaOnPremScimServer-*.rpm + the JDBC driver jar
+      - opc-agent-state:/opt/OktaOnPremScimServer      # config (registration keystore), logs, userlib survive restarts
+    depends_on:
+      - hr-db
+    restart: unless-stopped
+    # In the Okta app's Provisioning tab use host "hr-db", port 5432, database hrmaster, user okta_ops:
+    # the agent resolves hr-db on the compose network.
+
 volumes:
   peopleschoft-data:
+  hr-db-data:
+  opc-agent-state:
