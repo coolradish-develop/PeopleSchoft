@@ -1,4 +1,4 @@
-.PHONY: start seed reset demo sync status test mock-okta journey
+.PHONY: start seed reset demo sync status test mock-okta journey vm-setup verify okta-guide
 PORT ?= 8080
 
 start:        ## Start web UI + API (seeds on first run)
@@ -25,3 +25,9 @@ journey:      ## Drive the lifecycle journey with curl against a running server
 	./scripts/demo_journey.sh http://localhost:$(PORT)
 docker-files: ## Generate Dockerfile, docker-compose.yml and .dockerignore
 	python3 scripts/generate_docker.py --port $(PORT)
+vm-setup:     ## Interactive first-time setup on a VM (asks the questions, writes .env, generates files)
+	python3 scripts/vm_setup.py
+verify:       ## Check an install and report what is misconfigured
+	python3 scripts/vm_setup.py --verify
+okta-guide:   ## Reprint the Okta console values for this install
+	python3 scripts/vm_setup.py --okta
