@@ -118,60 +118,83 @@ CREATE ROLE okta_ops LOGIN SUPERUSER PASSWORD '{okta_ops_password}';
 GRANT ALL PRIVILEGES ON DATABASE hrmaster TO okta_ops;
 """
 
-OPC_AGENT_DOCKERFILE = """# RHEL-compatible host for the Okta agents used by the On-prem Connector for Generic Databases.
-# Okta supports a dedicated RHEL 8/9/10 server; this image is Red Hat UBI 9 with JDK 21 and OpenSSL 3, which
-# matches the documented software requirements. Running the agents in a container is NOT an Okta-supported
-# topology: use it for demos, and a RHEL VM for anything you need Okta to support.
+OPC_AGENT_DOCKERFILE = """# Host for the Okta On-prem SCIM Server agent (OktaOnPremScimServer rpm, agent mode) used by the
+# On-prem Connector for Generic Databases. Okta supports a dedicated RHEL 8/9/10 server; this image is
+# Red Hat UBI 9 with JDK 21 and OpenSSL 3, matching the documented software requirements.
+# Running the agent in a container is NOT an Okta-supported topology: fine for demos, use a RHEL VM otherwise.
 FROM registry.access.redhat.com/ubi9/ubi:latest
 
-RUN dnf -y install java-21-openjdk-devel openssl unzip procps-ng iputils bind-utils && dnf clean all
+RUN dnf -y install java-21-openjdk-devel openssl shadow-utils acl procps-ng hostname util-linux iputils bind-utils && dnf clean all
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk
 ENV PATH=$JAVA_HOME/bin:$PATH
 
-# Installers are not redistributable: download them from Okta Admin Console > Settings > Downloads and put them in ./agents
-#   OktaProvisioningAgent-*.rpm          Okta Provisioning Agent 3.0.6+
-#   OktaOnPremConnector-*.zip            Okta On-prem SCIM Server agent 1.5.0+ (1.7.0+ for Db2)
-#   <jdbc driver>.jar                    e.g. postgresql-42.x.jar
-WORKDIR /opt/okta
-COPY entrypoint.sh /opt/okta/entrypoint.sh
-RUN chmod +x /opt/okta/entrypoint.sh
-ENTRYPOINT ["/opt/okta/entrypoint.sh"]
+# The rpm is an Okta download (Admin Console > Settings > Downloads) and is mounted at /agents, never baked in.
+COPY entrypoint.sh /usr/local/bin/opc-entrypoint.sh
+RUN chmod +x /usr/local/bin/opc-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/opc-entrypoint.sh"]
 """
 
 OPC_AGENT_ENTRYPOINT = """#!/usr/bin/env bash
-# Installs and starts the Okta agents from the installers mounted at /agents, then tails their logs.
-set -euo pipefail
+# Okta On-prem SCIM Server agent (agent mode) in a container: install the rpm mounted at /agents, register the
+# agent with the org through Okta's device-authorization flow, then run it as the okscimserver service user.
+# This is a non-interactive port of /opt/OktaOnPremScimServer/bin/configure_agent.sh from the rpm.
+set -Eeuo pipefail
 AGENTS=/agents
-: "${{OKTA_ORG_URL:?set OKTA_ORG_URL (https://your-org.okta.com)}}"
-echo "== Okta On-prem Connector agent host (UBI 9, $(java -version 2>&1 | head -1), $(openssl version))"
-ls -1 "$AGENTS" 2>/dev/null || {{ echo "!! nothing in ./agents - download the installers from Settings > Downloads"; sleep infinity; }}
+APP=/opt/OktaOnPremScimServer; ETC=$APP/config; LOGS=$APP/logs
+CONF=$ETC/ops.conf; KS=$ETC/ops-keystore.p12; MODE_FILE=$ETC/agent-mode.conf
+: "${{OKTA_ORG_URL:?set OKTA_ORG_URL (https://your-org.okta.com) in .env}}"
+echo "== Okta On-prem SCIM Server agent host: UBI 9, $(java -version 2>&1 | head -1), $(openssl version)"
 
-RPM=$(ls "$AGENTS"/OktaProvisioningAgent*.rpm 2>/dev/null | head -1 || true)
-ZIP=$(ls "$AGENTS"/OktaOnPremConnector*.zip 2>/dev/null | head -1 || true)
-JAR=$(ls "$AGENTS"/*.jar 2>/dev/null | head -1 || true)
-[ -n "$JAR" ] && {{ mkdir -p /opt/okta/jdbc; cp "$JAR" /opt/okta/jdbc/; echo "JDBC driver: $JAR"; }}
-
-if [ -n "$RPM" ] && [ ! -d /opt/OktaProvisioningAgent ]; then
-  echo "== installing Okta Provisioning Agent: $RPM"
-  rpm -ivh "$RPM"
-  # Registration is interactive in the stock installer (org URL + a browser-based approval).
-  # Run it once from another terminal:  docker compose exec opc-agent /opt/OktaProvisioningAgent/configure_agent.sh
-  # and add -allowHttp true inside configure_agent.sh if your SCIM/JDBC targets are not TLS.
+RPM=$(ls "$AGENTS"/OktaOnPremScimServer*.rpm 2>/dev/null | head -1 || true)
+if [ -z "$RPM" ]; then
+  echo "!! no OktaOnPremScimServer-*.rpm in the agents folder. Download it from Admin Console > Settings > Downloads."; sleep infinity
 fi
 
-if [ -n "$ZIP" ] && [ ! -d /opt/okta/opc ]; then
-  echo "== installing Okta On-prem SCIM Server / On-prem Connector: $ZIP"
-  mkdir -p /opt/okta/opc && cd /opt/okta/opc && unzip -o -q "$ZIP"
-  : "${{OKTA_INSTALL_TOKEN:?set OKTA_INSTALL_TOKEN (single-use install token from the app's guide, valid 24h)}}"
-  : "${{OKTA_AGENT_NAME:=peopleschoft-opc}}"
-  chmod +x ./opc_install.sh
-  ./opc_install.sh -token="$OKTA_INSTALL_TOKEN" -agentName="$OKTA_AGENT_NAME" ${{OKTA_INSTALL_EXTRA_ARGS:-}}
-fi
+# service user (created by the rpm's %pre; recreate when the container was rebuilt but /opt/OktaOnPremScimServer persisted)
+getent group okscimserver >/dev/null || groupadd -r okscimserver
+getent passwd okscimserver >/dev/null || useradd -r -g okscimserver -d $APP -s /sbin/nologin okscimserver
 
-echo "== agents installed; keeping the container alive and tailing logs"
-touch /opt/okta/.keepalive
-tail -F /opt/OktaProvisioningAgent/logs/*.log /opt/okta/opc/logs/*.log 2>/dev/null &
-sleep infinity
+if ! ls $APP/lib/OktaOnPremScimServer-*.jar >/dev/null 2>&1; then
+  case "${{OKTA_EULA_ACCEPT:-}}" in y|Y|yes|YES|true|1) ;; *)
+    echo "!! Set OKTA_EULA_ACCEPT=yes in .env to accept Okta's On-prem SCIM Server EULA (https://www.okta.com/legal/) before installing."; sleep infinity;; esac
+  echo "== installing $RPM in agent mode"
+  INSTALL_MODE=agent OKTA_EULA_ACCEPT=yes rpm -ivh "$RPM"
+fi
+JAR=$(ls $APP/lib/OktaOnPremScimServer-*.jar | head -1)
+mkdir -p $APP/userlib $APP/userplugin $LOGS
+for j in "$AGENTS"/*.jar; do [ -f "$j" ] && cp -f "$j" $APP/userlib/ && echo "JDBC driver loaded: $(basename "$j")"; done
+[ -f "$ETC/jvm.conf" ] && . "$ETC/jvm.conf" || true
+
+JAVA_COMMON=(${{JAVA_OPTS:-}} -Dloader.main=com.okta.server.scim.ScimServerApplication -Dlogging.file.name=$LOGS/configure-agent.log
+             -Dspring.main.web-application-type=none -Dspring.profiles.active=agent -Dspring.main.banner-mode=off)
+LAUNCHER=org.springframework.boot.loader.launch.PropertiesLauncher
+step() {{ java "${{JAVA_COMMON[@]}}" -cp "$JAR" $LAUNCHER "$@" >> $LOGS/configure-agent.log 2>&1; }}
+prop() {{ sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" "$CONF" | tr -d '[:space:]'; }}
+
+if [ ! -f "$MODE_FILE" ]; then
+  PROXY=(-proxyEnabled false)
+  [ -n "${{OPC_PROXY_HOST:-}}" ] && PROXY=(-proxyEnabled true -proxyScheme "${{OPC_PROXY_SCHEME:-http}}" -proxyHost "$OPC_PROXY_HOST" -proxyPort "${{OPC_PROXY_PORT:-8080}}")
+  echo "== [1/3] requesting device authorization from ${{OKTA_ORG_URL%/}}"
+  step -mode deviceAuthorizationStart -orgUrl "${{OKTA_ORG_URL%/}}" -configFilePath "$CONF" -keystoreFilePath "$KS" -noInstance true "${{PROXY[@]}}" \\
+    || {{ echo "!! device authorization failed; see $LOGS/configure-agent.log"; tail -20 $LOGS/configure-agent.log; sleep infinity; }}
+  echo; echo "  ================================================================================"
+  echo "  APPROVE THIS AGENT: open  $(prop verificationUri)"
+  echo "  and enter the code   $(prop userCode)   as an Okta admin (super admin recommended)."
+  echo "  ================================================================================"; echo
+  echo "== [2/3] waiting for approval in the browser ..."
+  step -mode deviceAuthorizationPoll -configFilePath "$CONF" -keystoreFilePath "$KS" -serviceAccountName okscimserver \\
+    || {{ echo "!! authorization was not granted; restart the container to get a new code"; tail -20 $LOGS/configure-agent.log; sleep infinity; }}
+  echo "== [3/3] registering the agent with Okta"
+  step -mode register -configFilePath "$CONF" -keystoreFilePath "$KS" \\
+    || {{ echo "!! registration failed; see $LOGS/configure-agent.log"; tail -20 $LOGS/configure-agent.log; sleep infinity; }}
+  echo "AGENT_MODE=true" > "$MODE_FILE"
+  echo "== registered. The agent now appears under Directory > Directory Integrations / the app's Provisioning tab."
+fi
+chown -R okscimserver:okscimserver $ETC $LOGS $APP/userlib $APP/userplugin
+chmod 600 "$CONF" "$KS" "$MODE_FILE"
+touch $LOGS/application.log; tail -n 0 -F $LOGS/application.log &
+echo "== starting OktaOnPremScimAgent (polling agent mode; JDBC drivers from $APP/userlib)"
+exec runuser -u okscimserver -- $APP/bin/OktaOnPremScimAgent.sh
 """
 
 OPC_AGENT_SERVICE = """
@@ -183,14 +206,18 @@ OPC_AGENT_SERVICE = """
     profiles: ["agents"]
     environment:
       OKTA_ORG_URL: "${{OKTA_ORG_URL:-}}"
-      OKTA_INSTALL_TOKEN: "${{OKTA_INSTALL_TOKEN:-}}"
-      OKTA_AGENT_NAME: "${{OKTA_AGENT_NAME:-peopleschoft-opc}}"
+      OKTA_EULA_ACCEPT: "${{OKTA_EULA_ACCEPT:-}}"       # set to yes in .env to accept Okta's EULA for the agent
+      OPC_PROXY_HOST: "${{OPC_PROXY_HOST:-}}"
+      OPC_PROXY_PORT: "${{OPC_PROXY_PORT:-}}"
+      OPC_PROXY_SCHEME: "${{OPC_PROXY_SCHEME:-http}}"
     volumes:
-      - ./agents:/agents:ro
-      - opc-agent-state:/opt
+      - {agents_dir}:/agents:ro                          # OktaOnPremScimServer-*.rpm + the JDBC driver jar
+      - opc-agent-state:/opt/OktaOnPremScimServer      # config (registration keystore), logs, userlib survive restarts
     depends_on:
       - hr-db
     restart: unless-stopped
+    # In the Okta app's Provisioning tab use host "hr-db", port 5432, database hrmaster, user okta_ops:
+    # the agent resolves hr-db on the compose network.
 """
 
 HR_DB_MYSQL_SERVICES = """
@@ -244,11 +271,12 @@ __pycache__/
 """
 
 
-def render(port, python, with_mock, live=True, with_hr_db=False, interval=30, engine="postgres", okta_ops_password="okta-ops-change-me"):
+def render(port, python, with_mock, live=True, with_hr_db=False, interval=30, engine="postgres", okta_ops_password="okta-ops-change-me",
+           agents_dir="./agents"):
     hrdb_tpl = HR_DB_MYSQL_SERVICES if engine == "mysql" else HR_DB_SERVICES
     hrdb = hrdb_tpl.format(interval=interval) if with_hr_db else ""
     if with_hr_db:
-        hrdb += OPC_AGENT_SERVICE
+        hrdb += OPC_AGENT_SERVICE.format(agents_dir=agents_dir)
     files = {
         "Dockerfile": DOCKERFILE.format(port=port, python=python),
         "docker-compose.yml": COMPOSE.format(port=port, mock=MOCK_SERVICE if with_mock else "", live=LIVE_MOUNTS if live else "",
@@ -262,11 +290,11 @@ def render(port, python, with_mock, live=True, with_hr_db=False, interval=30, en
             files["hr-db/init.sql"] = HR_DB_INIT_SQL.format(okta_ops_password=okta_ops_password)
         files["opc-agent/Dockerfile"] = OPC_AGENT_DOCKERFILE
         files["opc-agent/entrypoint.sh"] = OPC_AGENT_ENTRYPOINT
-        files["agents/README.txt"] = ("Put the Okta installers here (Admin Console > Settings > Downloads), then: docker compose --profile agents up -d --build\n"
-                                      "  OktaProvisioningAgent-<version>.rpm   (Okta Provisioning Agent 3.0.6+)\n"
-                                      "  OktaOnPremConnector-<version>.zip     (On-prem SCIM Server agent 1.5.0+, 1.7.0+ for Db2)\n"
-                                      "  postgresql-<version>.jar              (JDBC driver for the mirror database)\n"
-                                      "These files are licensed by Okta and are git-ignored.\n")
+        files[f"{agents_dir.rstrip('/')}/README.txt"] = (
+            "Put the Okta agent rpm and the JDBC driver here, then: docker compose --profile agents up -d --build\n"
+            "  OktaOnPremScimServer-<version>.rpm    Okta On-prem SCIM Server agent (1.5.0+, 1.7.0+ for Db2), Admin Console > Settings > Downloads\n"
+            "  postgresql-<version>.jar              JDBC driver for the mirror database (https://jdbc.postgresql.org/download/)\n"
+            "The rpm is licensed by Okta and git-ignored. Then watch: docker compose logs -f opc-agent  (it prints the approval URL + code)\n")
     return files
 
 
@@ -280,12 +308,14 @@ def main():
     ap.add_argument("--hr-db-engine", choices=["postgres", "mysql"], default="postgres", help="mirror engine: postgres (port 5432) or mysql (port 3306), matching Okta's port table")
     ap.add_argument("--mirror-interval", type=int, default=30, help="seconds between HR mirror refreshes (default 30)")
     ap.add_argument("--okta-ops-password", default="okta-ops-change-me", help="password for the okta_ops admin user the connector logs in with (Postgres mirror)")
+    ap.add_argument("--agents-dir", default=None, help="folder with OktaOnPremScimServer-*.rpm and the JDBC jar (default: ./OktaOnPremAgentResources if present, else ./agents)")
     ap.add_argument("--out", default=str(ROOT), help="directory to write into (default: repo root)")
     ap.add_argument("--print", action="store_true", help="print the files instead of writing them")
     ap.add_argument("--force", action="store_true", help="overwrite existing files")
     a = ap.parse_args()
 
-    files = render(a.port, a.python, not a.no_mock, not a.no_live, a.with_hr_db, a.mirror_interval, a.hr_db_engine, a.okta_ops_password)
+    agents_dir = a.agents_dir or ("./OktaOnPremAgentResources" if (Path(a.out) / "OktaOnPremAgentResources").is_dir() else "./agents")
+    files = render(a.port, a.python, not a.no_mock, not a.no_live, a.with_hr_db, a.mirror_interval, a.hr_db_engine, a.okta_ops_password, agents_dir)
     out = Path(a.out)
     if a.print:
         for name, content in files.items():
@@ -316,8 +346,11 @@ Rebuild only if the Dockerfile itself changes:  docker compose up -d --build
 HR master mirror for the Okta On-prem Connector (Generic Databases):
   {'MySQL at <this host>:3306' if a.hr_db_engine == 'mysql' else 'Postgres at <this host>:5432'}, database hrmaster (tables hr_worker, hr_entitlement, hr_worker_entitlement, view hr_worker_v)
   connector login: {'user hr / password hr' if a.hr_db_engine == 'mysql' else 'user okta_ops (admin privileges, as Okta requires) / password ' + a.okta_ops_password}
-  Okta agents: put the installers in ./agents, set OKTA_ORG_URL, OKTA_INSTALL_TOKEN in .env, then: docker compose --profile agents up -d --build
-              (demo topology; Okta supports the agents on a dedicated RHEL 8/9/10 server - run scripts/opc_preflight.py there)
+  Okta agent:  rpm + JDBC jar in {agents_dir}; set OKTA_ORG_URL and OKTA_EULA_ACCEPT=yes in .env, then
+                 docker compose --profile agents up -d --build && docker compose logs -f opc-agent
+               approve the URL + code it prints as an Okta admin; the agent then registers and starts polling.
+               In the app's Provisioning tab: host hr-db, port 5432, database hrmaster, user okta_ops.
+               (demo topology; Okta supports the agent on a dedicated RHEL 8/9/10 server - run scripts/opc_preflight.py there)
   docker compose logs -f hr-mirror              # prints "mirrored hr_master.{a.hr_db_engine}.sql" every {a.mirror_interval}s
   Agent host preflight (RHEL 8/9/10, JDK 21, OpenSSL 3, JDBC, ports): python3 scripts/opc_preflight.py --db {a.hr_db_engine} --db-host <this machine> --jdbc <driver.jar> --okta-org https://<org>.okta.com
   Connector SQL values: open http://localhost:{a.port}/hr-master

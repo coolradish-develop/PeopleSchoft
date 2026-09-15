@@ -198,18 +198,22 @@ python3 opc_preflight.py --db postgres --db-host hr-db.example.com --jdbc /opt/o
    `docker compose up -d --build`. This starts PeopleSchoft, the Postgres mirror on port 5432 with the
    `okta_ops` admin user the connector logs in with, and the mirror job. Put the machine's host name or IP in
    `PS_HR_DB_HOST` in `.env`: that is what the Okta agent host must reach, not `localhost`.
-2. Agent host. Okta supports the two agents on a dedicated RHEL 8/9/10 server that can reach the mirror on 5432
-   and Okta on 443. Copy `scripts/opc_preflight.py` there and run it until it shows no FAIL. For a demo only,
-   the compose file also has an `opc-agent` service (Red Hat UBI 9, JDK 21, OpenSSL 3): download the installers
-   from Admin Console > Settings > Downloads into `./agents/` (Okta Provisioning Agent rpm, On-prem Connector zip,
-   the PostgreSQL JDBC jar), set `OKTA_ORG_URL`, `OKTA_INSTALL_TOKEN` and `OKTA_AGENT_NAME` in `.env`, and run
-   `docker compose --profile agents up -d --build`. Registering the Provisioning Agent is interactive:
-   `docker compose exec opc-agent /opt/OktaProvisioningAgent/configure_agent.sh`. Containers are not an
-   Okta-supported topology for the agents; use the RHEL VM for anything Okta needs to support.
+2. The agent. The connector runs on the **Okta On-prem SCIM Server** agent (`OktaOnPremScimServer-<version>.rpm`
+   from Admin Console > Settings > Downloads) installed in *agent mode*, which polls Okta and reads the database
+   over JDBC; no inbound port is needed. Okta supports it on a dedicated RHEL 8/9/10 server (run
+   `scripts/opc_preflight.py` there; install with `INSTALL_MODE=agent OKTA_EULA_ACCEPT=yes yum localinstall <rpm>`,
+   drop the JDBC jar in `/opt/OktaOnPremScimServer/userlib/`, then `sudo /opt/OktaOnPremScimServer/bin/configure_agent.sh`).
+   For a demo the compose file has an `opc-agent` service (Red Hat UBI 9, JDK 21, OpenSSL 3) that does the same
+   non-interactively: put the rpm and the PostgreSQL JDBC jar in `./OktaOnPremAgentResources/` (or `./agents/`),
+   set `OKTA_ORG_URL` and `OKTA_EULA_ACCEPT=yes` in `.env`, run `docker compose --profile agents up -d --build`, then
+   `docker compose logs -f opc-agent`: it prints an approval URL and a code. Open the URL as an Okta admin, enter
+   the code, and the agent registers itself and starts. Registration state lives in a volume, so restarts do not
+   ask again. Containers are not an Okta-supported topology for the agent; use the RHEL VM when it matters.
 3. In Okta, open the app (Applications > *On-prem Connector for Generic Databases*; set `OKTA_OPC_APP_ID` in `.env`
    and the HR as a Source page links straight to it). General tab > Entitlement management > Enabled. Provisioning tab
-   > Enable provisioning, pick the SCIM agent, enter database type PostgreSQL, host `PS_HR_DB_HOST`, port 5432,
-   database `hrmaster`, user `okta_ops` and its password, then Connect agents.
+   > Enable provisioning, pick the agent you just registered, enter database type PostgreSQL, host `hr-db` when the
+   agent runs in compose (otherwise `PS_HR_DB_HOST`), port 5432, database `hrmaster`, user `okta_ops` and its
+   password, then Connect agents.
 4. Paste the Schema discovery & Import and Database Operations values from the HR as a Source page (Get Users,
    user ID column `emplid`, Get All Entitlements, Account Status Attribute `account_status` = `ACTIVE`,
    Incremental Import with `last_update_dttm`), map attributes, and run an import. Run the Lifecycle Journey in

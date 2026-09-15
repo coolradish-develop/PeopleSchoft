@@ -6,3 +6,6 @@ __pycache__/
 # Okta agent installers and JDBC drivers are licensed downloads
 agents/*
 !agents/README.txt
+
+# Okta agent installers (licensed downloads)
+OktaOnPremAgentResources/
